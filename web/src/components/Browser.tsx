@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Cloud,
   Clock,
+  Eye,
   Files,
   Folder,
   FolderOpen,
@@ -23,9 +24,11 @@ import { useVault } from "../lib/vault";
 import { crumbs, normalizePath } from "../lib/tree";
 import { browseUrl } from "../lib/routes";
 import { fileVisual } from "../lib/fileType";
+import { canPreview } from "../lib/preview";
 import { formatRelative, formatSize } from "../lib/format";
 import type { TreeFolder } from "../lib/tree";
 import { Badge, Button, IconButton, Input, Skeleton, Spinner, Tooltip } from "./ui";
+import { PreviewModal } from "./PreviewModal";
 
 const docKey = (d: Pick<DocItem, "format" | "doc_type">) =>
   (d.format || d.doc_type || "").toLowerCase();
@@ -57,6 +60,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
   const [working, setWorking] = useState(false);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
+  const [preview, setPreview] = useState<DocItem | null>(null);
 
   const setViewPersist = (v: View) => {
     setView(v);
@@ -295,6 +299,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
               hasDeletable={deletableDocs.length > 0}
               onOpenFolder={(p) => navigate(browseUrl(p))}
               showFolderCol={showFolderColForced}
+              onPreview={setPreview}
             />
           ) : (
             <GridView
@@ -305,6 +310,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
               onToggleDoc={toggleDoc}
               onToggleFolder={toggleFolder}
               onOpenFolder={(p) => navigate(browseUrl(p))}
+              onPreview={setPreview}
             />
           )}
 
@@ -321,6 +327,8 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
           )}
         </div>
       </div>
+
+      {preview && <PreviewModal doc={preview} onClose={() => setPreview(null)} />}
     </div>
   );
 }
@@ -370,6 +378,7 @@ interface ListProps {
   hasDeletable: boolean;
   onOpenFolder: (p: string) => void;
   showFolderCol: boolean;
+  onPreview: (d: DocItem) => void;
 }
 
 function ListView(p: ListProps) {
@@ -415,6 +424,7 @@ function ListView(p: ListProps) {
             selected={p.selDocs.has(d.id)}
             onToggle={() => p.onToggleDoc(d.id)}
             showFolderCol={p.showFolderCol}
+            onPreview={p.onPreview}
           />
         ))}
       </tbody>
@@ -495,15 +505,18 @@ function DocRow({
   selected,
   onToggle,
   showFolderCol,
+  onPreview,
 }: {
   doc: DocItem;
   selected: boolean;
   onToggle: () => void;
   showFolderCol: boolean;
+  onPreview: (d: DocItem) => void;
 }) {
   const v = fileVisual(doc);
   const deleted = !!doc.source_deleted_at;
   const archived = doc.object_key !== "";
+  const previewable = canPreview(doc);
   return (
     <tr
       className={"file-row" + (selected ? " is-selected" : "") + (!archived ? " is-unarchived" : "")}
@@ -522,7 +535,19 @@ function DocRow({
       <td>
         <div className="file-row__name">
           <v.Icon color={v.color} />
-          <span>{doc.title}</span>
+          {previewable ? (
+            <span
+              className="file-row__link"
+              onClick={(e) => {
+                e.stopPropagation();
+                onPreview(doc);
+              }}
+            >
+              {doc.title}
+            </span>
+          ) : (
+            <span>{doc.title}</span>
+          )}
         </div>
       </td>
       <td>
@@ -549,6 +574,9 @@ function DocRow({
       </td>
       <td className="col-actions" onClick={(e) => e.stopPropagation()}>
         <div className="row-actions">
+          {previewable && (
+            <IconButton icon={Eye} size="sm" label="预览" onClick={() => onPreview(doc)} />
+          )}
           {archived && (
             <Tooltip label="下载">
               <a href={api.downloadUrl(doc.id)} className="icon-btn icon-btn--sm">
@@ -571,6 +599,7 @@ function GridView({
   onToggleDoc,
   onToggleFolder,
   onOpenFolder,
+  onPreview,
 }: {
   folders: TreeFolder[];
   docs: DocItem[];
@@ -579,6 +608,7 @@ function GridView({
   onToggleDoc: (id: string) => void;
   onToggleFolder: (id: string) => void;
   onOpenFolder: (p: string) => void;
+  onPreview: (d: DocItem) => void;
 }) {
   return (
     <div className="file-grid">
@@ -610,6 +640,7 @@ function GridView({
       {docs.map((d) => {
         const v = fileVisual(d);
         const selected = selDocs.has(d.id);
+        const previewable = canPreview(d);
         return (
           <div
             key={d.id}
@@ -624,6 +655,19 @@ function GridView({
                 onChange={() => onToggleDoc(d.id)}
                 onClick={(e) => e.stopPropagation()}
               />
+            )}
+            {previewable && (
+              <button
+                className="grid-card__preview"
+                aria-label="预览"
+                title="预览"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onPreview(d);
+                }}
+              >
+                <Eye />
+              </button>
             )}
             <div className="grid-card__icon">
               <v.Icon color={v.color} />
