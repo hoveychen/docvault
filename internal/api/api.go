@@ -6,8 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
-	"time"
+	"strconv"
 
 	"github.com/hoveychen/docvault/internal/app"
 	"github.com/hoveychen/docvault/internal/db"
@@ -300,12 +302,27 @@ func (h *Handler) downloadDocument(w http.ResponseWriter, r *http.Request) {
 	if doc.Format != "" {
 		filename += "." + doc.Format
 	}
-	url, err := h.app.Store.PresignDownload(r.Context(), doc.ObjectKey, filename, 5*time.Minute)
+
+	// Stream the object through the server rather than redirecting to a pre-signed
+	// URL: in single-origin deployments (e.g. Muvee) object storage isn't publicly
+	// reachable from the browser, so the app must proxy the bytes.
+	reader, contentType, size, err := h.app.Store.Open(r.Context(), doc.ObjectKey)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "presign failed")
+		writeError(w, http.StatusInternalServerError, "open object failed")
 		return
 	}
-	http.Redirect(w, r, url, http.StatusFound)
+	defer reader.Close()
+
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	if size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, reader)
 }
 
 func (h *Handler) listFolders(w http.ResponseWriter, r *http.Request) {
