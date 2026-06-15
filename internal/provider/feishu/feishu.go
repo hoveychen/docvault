@@ -15,6 +15,7 @@ import (
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkauthen "github.com/larksuite/oapi-sdk-go/v3/service/authen/v1"
 	larkdrive "github.com/larksuite/oapi-sdk-go/v3/service/drive/v1"
+	larkwiki "github.com/larksuite/oapi-sdk-go/v3/service/wiki/v2"
 
 	"github.com/hoveychen/docvault/internal/config"
 	"github.com/hoveychen/docvault/internal/provider"
@@ -22,17 +23,23 @@ import (
 
 const providerKey = "feishu"
 
-// exportable maps a Feishu doc type to the export file extension we request.
-// Types not present here are skipped during sync (recorded, not exported).
+// exportable maps a Feishu doc type to the export file extension we request via
+// the export-task API. Types not present here (e.g. "file") are handled
+// separately or skipped. Per-item export failures are non-fatal (the engine
+// logs and skips them), so best-effort types like bitable/slides are safe to
+// list even where a given tenant rejects the format.
 var exportable = map[string]string{
-	"docx":  "docx",
-	"doc":   "docx",
-	"sheet": "xlsx",
+	"docx":    "docx",
+	"doc":     "docx",
+	"sheet":   "xlsx",
+	"bitable": "xlsx",
+	"slides":  "pptx",
 }
 
 var contentTypes = map[string]string{
 	"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 	"xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	"pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 	"pdf":  "application/pdf",
 }
 
@@ -59,8 +66,8 @@ func (p *Provider) AuthCodeURL(state, redirectURI string) string {
 	q := url.Values{}
 	q.Set("redirect_uri", redirectURI)
 	q.Set("state", state)
-	// Read-only scopes sufficient to list + export drive documents.
-	q.Set("scope", "drive:drive:readonly docs:document:readonly")
+	// Read-only scopes sufficient to list + export drive documents and wiki nodes.
+	q.Set("scope", "drive:drive:readonly docs:document:readonly wiki:wiki:readonly")
 	return fmt.Sprintf("%s/open-apis/authen/v1/authorize?%s", p.baseURL, q.Encode())
 }
 
@@ -116,10 +123,14 @@ func (p *Provider) Refresh(ctx context.Context, refreshToken string) (*provider.
 	}, nil
 }
 
-// List walks the user's drive recursively starting from the root folder.
+// List walks the user's drive recursively from the root folder, then appends
+// every wiki node the user can reach.
 func (p *Provider) List(ctx context.Context, tok *provider.Token) ([]provider.Item, error) {
 	var items []provider.Item
 	if err := p.walk(ctx, tok.AccessToken, "", "", &items); err != nil {
+		return nil, err
+	}
+	if err := p.listWiki(ctx, tok.AccessToken, &items); err != nil {
 		return nil, err
 	}
 	return items, nil
@@ -170,8 +181,117 @@ func (p *Provider) walk(ctx context.Context, accessToken, folderToken, pathPrefi
 	}
 }
 
-// Export creates an export task, polls it to completion, and downloads the bytes.
+// listWiki enumerates every wiki space the user can see and recurses each
+// space's node tree, appending each node's underlying object as an Item keyed
+// by its obj_token / obj_type (so Export handles it like any drive doc).
+func (p *Provider) listWiki(ctx context.Context, accessToken string, out *[]provider.Item) error {
+	opt := larkcore.WithUserAccessToken(accessToken)
+	pageToken := ""
+	for {
+		b := larkwiki.NewListSpaceReqBuilder().PageSize(50)
+		if pageToken != "" {
+			b.PageToken(pageToken)
+		}
+		resp, err := p.client.Wiki.Space.List(ctx, b.Build(), opt)
+		if err != nil {
+			return fmt.Errorf("list wiki spaces: %w", err)
+		}
+		if !resp.Success() {
+			return fmt.Errorf("list wiki spaces: code=%d msg=%s", resp.Code, resp.Msg)
+		}
+		for _, sp := range resp.Data.Items {
+			spaceName := strDeref(sp.Name)
+			if err := p.walkWikiNodes(ctx, opt, strDeref(sp.SpaceId), "", joinPath("Wiki", spaceName), out); err != nil {
+				return err
+			}
+		}
+		if resp.Data.HasMore != nil && *resp.Data.HasMore && resp.Data.PageToken != nil {
+			pageToken = *resp.Data.PageToken
+			continue
+		}
+		return nil
+	}
+}
+
+func (p *Provider) walkWikiNodes(ctx context.Context, opt larkcore.RequestOptionFunc, spaceID, parentNode, pathPrefix string, out *[]provider.Item) error {
+	pageToken := ""
+	for {
+		b := larkwiki.NewListSpaceNodeReqBuilder().SpaceId(spaceID).PageSize(50)
+		if parentNode != "" {
+			b.ParentNodeToken(parentNode)
+		}
+		if pageToken != "" {
+			b.PageToken(pageToken)
+		}
+		resp, err := p.client.Wiki.SpaceNode.List(ctx, b.Build(), opt)
+		if err != nil {
+			return fmt.Errorf("list wiki nodes (space %s): %w", spaceID, err)
+		}
+		if !resp.Success() {
+			return fmt.Errorf("list wiki nodes (space %s): code=%d msg=%s", spaceID, resp.Code, resp.Msg)
+		}
+		for _, n := range resp.Data.Items {
+			title := strDeref(n.Title)
+			objToken := strDeref(n.ObjToken)
+			objType := strDeref(n.ObjType)
+			if objToken != "" && objType != "" {
+				*out = append(*out, provider.Item{
+					ExternalID: objToken,
+					Title:      title,
+					DocType:    objType,
+					SourcePath: pathPrefix,
+				})
+			}
+			if n.HasChild != nil && *n.HasChild {
+				child := joinPath(pathPrefix, title)
+				if err := p.walkWikiNodes(ctx, opt, spaceID, strDeref(n.NodeToken), child, out); err != nil {
+					return err
+				}
+			}
+		}
+		if resp.Data.HasMore != nil && *resp.Data.HasMore && resp.Data.PageToken != nil {
+			pageToken = *resp.Data.PageToken
+			continue
+		}
+		return nil
+	}
+}
+
+// downloadBinary fetches a raw drive file (non-document) and keeps its original bytes.
+func (p *Provider) downloadBinary(ctx context.Context, accessToken string, item provider.Item) (*provider.Blob, error) {
+	opt := larkcore.WithUserAccessToken(accessToken)
+	req := larkdrive.NewDownloadFileReqBuilder().FileToken(item.ExternalID).Build()
+	resp, err := p.client.Drive.File.Download(ctx, req, opt)
+	if err != nil {
+		return nil, fmt.Errorf("download file: %w", err)
+	}
+	if !resp.Success() {
+		return nil, fmt.Errorf("download file: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	data, err := io.ReadAll(resp.File)
+	if err != nil {
+		return nil, fmt.Errorf("read file bytes: %w", err)
+	}
+
+	filename := sanitizeFilename(item.Title)
+	ext := ""
+	if i := strings.LastIndex(filename, "."); i >= 0 && i < len(filename)-1 {
+		ext = filename[i+1:]
+	}
+	return &provider.Blob{
+		Filename:    filename,
+		Format:      ext,
+		ContentType: "application/octet-stream",
+		Data:        data,
+	}, nil
+}
+
+// Export turns one item into portable bytes. Binary files are downloaded raw;
+// online documents go through the export-task API.
 func (p *Provider) Export(ctx context.Context, tok *provider.Token, item provider.Item) (*provider.Blob, error) {
+	if item.DocType == "file" {
+		return p.downloadBinary(ctx, tok.AccessToken, item)
+	}
 	ext, ok := exportable[item.DocType]
 	if !ok {
 		return nil, fmt.Errorf("doc type %q is not exportable", item.DocType)
