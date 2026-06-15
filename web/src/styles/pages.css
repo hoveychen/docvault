@@ -564,6 +564,53 @@
   background: var(--bg-app);
   position: relative;
 }
+.preview-modal__attachments {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface, var(--bg-app));
+}
+.preview-modal__attachments-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.preview-modal__attachments-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.preview-modal__attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  text-decoration: none;
+  background: var(--bg-app);
+  max-width: 280px;
+}
+.preview-modal__attachment:hover {
+  border-color: var(--accent, var(--text));
+}
+.preview-modal__attachment-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.preview-modal__attachment-size {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
 .preview-center {
   display: flex;
   align-items: center;

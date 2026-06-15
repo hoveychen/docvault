@@ -4,6 +4,7 @@ import { ArrowDownToLine, X } from "lucide-react";
 import { api, type DocItem } from "../api";
 import { fileVisual } from "../lib/fileType";
 import { previewKind, fetchDoc, type PreviewKind } from "../lib/preview";
+import { formatSize } from "../lib/format";
 import { Badge, IconButton, Spinner } from "./ui";
 
 interface Props {
@@ -156,6 +157,33 @@ export function PreviewModal({ doc, onClose }: Props) {
             downloadUrl={api.downloadUrl(doc.id)}
           />
         </div>
+
+        {doc.attachments && doc.attachments.length > 0 && (
+          <footer className="preview-modal__attachments">
+            <span className="preview-modal__attachments-label">
+              内嵌附件 · {doc.attachments.length}
+            </span>
+            <ul className="preview-modal__attachments-list">
+              {doc.attachments.map((a) => (
+                <li key={a.id}>
+                  <a
+                    href={api.attachmentDownloadUrl(doc.id, a.id)}
+                    className="preview-modal__attachment"
+                    title={`下载 ${a.filename}`}
+                  >
+                    <ArrowDownToLine size={14} />
+                    <span className="preview-modal__attachment-name">
+                      {a.filename || "附件"}
+                    </span>
+                    <span className="preview-modal__attachment-size">
+                      {formatSize(a.size_bytes)}
+                    </span>
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </footer>
+        )}
       </div>
     </div>,
     document.body,
