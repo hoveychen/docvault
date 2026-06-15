@@ -314,3 +314,115 @@ func (r *Repo) MarkSourceDeleted(ctx context.Context, userID, id string) error {
 		`UPDATE documents SET source_deleted_at=now() WHERE id=$1 AND user_id=$2`, id, userID)
 	return err
 }
+
+// --- folders ---
+
+// UpsertFolder records (or refreshes) a source folder by natural key.
+func (r *Repo) UpsertFolder(ctx context.Context, f *models.Folder) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO folders (user_id, provider, external_id, title, source_path, owner_external_id, synced_at)
+		 VALUES ($1,$2,$3,$4,$5,$6, now())
+		 ON CONFLICT (user_id, provider, external_id) DO UPDATE SET
+		   title=EXCLUDED.title, source_path=EXCLUDED.source_path,
+		   owner_external_id=EXCLUDED.owner_external_id, synced_at=now()`,
+		f.UserID, f.Provider, f.ExternalID, f.Title, f.SourcePath, f.OwnerExternalID)
+	return err
+}
+
+const folderCols = `SELECT id, user_id, provider, external_id, title, source_path,
+	owner_external_id, source_deleted_at, synced_at FROM folders`
+
+func scanFolder(row pgx.Row) (*models.Folder, error) {
+	f := &models.Folder{}
+	err := row.Scan(&f.ID, &f.UserID, &f.Provider, &f.ExternalID, &f.Title,
+		&f.SourcePath, &f.OwnerExternalID, &f.SourceDeletedAt, &f.SyncedAt)
+	return f, err
+}
+
+func (r *Repo) ListFolders(ctx context.Context, userID string) ([]models.Folder, error) {
+	rows, err := r.pool.Query(ctx, folderCols+` WHERE user_id=$1 ORDER BY source_path`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Folder
+	for rows.Next() {
+		f, err := scanFolder(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *f)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repo) GetFoldersByIDs(ctx context.Context, userID string, ids []string) ([]models.Folder, error) {
+	rows, err := r.pool.Query(ctx, folderCols+` WHERE user_id=$1 AND id = ANY($2)`, userID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Folder
+	for rows.Next() {
+		f, err := scanFolder(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *f)
+	}
+	return out, rows.Err()
+}
+
+// FolderDeletability reports whether a folder's cloud original can be safely
+// deleted: the user must own the folder, it must not already be deleted, and
+// every document anywhere under its path must be archived and owned by the user
+// (so nothing un-backed-up or belonging to someone else is lost in the cascade).
+func (r *Repo) FolderDeletability(ctx context.Context, userID string, f *models.Folder, userExtID string) (bool, string) {
+	if f.SourceDeletedAt != nil {
+		return false, "原件已删除"
+	}
+	if userExtID == "" || f.OwnerExternalID == "" || f.OwnerExternalID != userExtID {
+		return false, "非本人拥有，无法删除"
+	}
+	var unarchived, notOwned int
+	err := r.pool.QueryRow(ctx,
+		`SELECT
+		   count(*) FILTER (WHERE object_key='' AND source_deleted_at IS NULL),
+		   count(*) FILTER (WHERE owner_external_id IS DISTINCT FROM $3)
+		 FROM documents
+		 WHERE user_id=$1 AND (source_path=$2 OR starts_with(source_path, $2 || '/'))`,
+		userID, f.SourcePath, userExtID).Scan(&unarchived, &notOwned)
+	if err != nil {
+		return false, "无法校验文件夹内容"
+	}
+	if unarchived > 0 {
+		return false, "文件夹内有未归档的文档"
+	}
+	if notOwned > 0 {
+		return false, "文件夹内有非本人拥有的文档"
+	}
+	return true, ""
+}
+
+// MarkFolderTreeSourceDeleted marks the folder and every document under its path
+// as having their cloud originals deleted.
+func (r *Repo) MarkFolderTreeSourceDeleted(ctx context.Context, userID string, f *models.Folder) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if _, err := tx.Exec(ctx,
+		`UPDATE documents SET source_deleted_at=now()
+		   WHERE user_id=$1 AND (source_path=$2 OR starts_with(source_path, $2 || '/'))
+		     AND source_deleted_at IS NULL`,
+		userID, f.SourcePath); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE folders SET source_deleted_at=now() WHERE id=$1 AND user_id=$2`,
+		f.ID, userID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

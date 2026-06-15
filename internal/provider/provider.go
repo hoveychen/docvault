@@ -31,13 +31,14 @@ type Identity struct {
 	AvatarURL      string
 }
 
-// Item is one document/file discovered during List.
+// Item is one document/file/folder discovered during List.
 type Item struct {
 	ExternalID string // provider token/id
 	Title      string
-	DocType    string // docx, doc, sheet, bitable, slides, file, ...
-	SourcePath string // human-readable folder path
+	DocType    string // docx, doc, sheet, bitable, slides, file, folder, ...
+	SourcePath string // parent folder path (for a folder, its containing path)
 	OwnerID    string // provider id of the owner (for delete-permission gating); empty if unknown
+	IsFolder   bool   // true when this item is a folder container, not an archivable doc
 }
 
 // Blob is exported bytes ready to store.

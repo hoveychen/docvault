@@ -160,6 +160,16 @@ func (p *Provider) walk(ctx context.Context, accessToken, folderToken, pathPrefi
 			token := strDeref(f.Token)
 			if typ == "folder" {
 				child := joinPath(pathPrefix, name)
+				// Record the folder itself (so its cloud original can be deleted
+				// once everything under it is archived), then recurse into it.
+				*out = append(*out, provider.Item{
+					ExternalID: token,
+					Title:      name,
+					DocType:    "folder",
+					SourcePath: child,
+					OwnerID:    strDeref(f.OwnerId),
+					IsFolder:   true,
+				})
 				if err := p.walk(ctx, accessToken, token, child, out); err != nil {
 					return err
 				}

@@ -55,16 +55,51 @@ func (e *Engine) Run(ctx context.Context, job *models.SyncJob) error {
 	_ = e.repo.UpdateJobProgress(ctx, job.ID, total, done, failed)
 
 	for _, item := range items {
+		// Folders aren't exported; record them so a whole folder can later be
+		// deleted once everything under it is archived.
+		if item.IsFolder {
+			folder := &models.Folder{
+				UserID:          job.UserID,
+				Provider:        acct.Provider,
+				ExternalID:      item.ExternalID,
+				Title:           item.Title,
+				SourcePath:      item.SourcePath,
+				OwnerExternalID: item.OwnerID,
+			}
+			if err := e.repo.UpsertFolder(ctx, folder); err != nil {
+				return fmt.Errorf("record folder: %w", err)
+			}
+			done++
+			_ = e.repo.UpdateJobProgress(ctx, job.ID, total, done, failed)
+			continue
+		}
+
 		// Refresh the token mid-run if it expired during a long sync.
 		tok, err = e.tokens.ValidToken(ctx, acct)
 		if err != nil {
 			return fmt.Errorf("token refresh mid-sync: %w", err)
 		}
 
+		// Base record captures the item's existence + owner even if export fails,
+		// so folder-deletion can tell whether everything under a folder is archived.
+		doc := &models.Document{
+			UserID:          job.UserID,
+			Provider:        acct.Provider,
+			ExternalID:      item.ExternalID,
+			Title:           item.Title,
+			DocType:         item.DocType,
+			SourcePath:      item.SourcePath,
+			OwnerExternalID: item.OwnerID,
+		}
+
 		blob, err := prov.Export(ctx, tok, item)
 		if err != nil {
-			// Non-exportable types and per-item failures are skipped, not fatal.
+			// Non-exportable types and per-item failures are recorded (object_key
+			// stays empty = not archived) but don't abort the run.
 			e.log.Warn("skip item", "title", item.Title, "doc_type", item.DocType, "err", err)
+			if uerr := e.repo.UpsertDocument(ctx, doc); uerr != nil {
+				return fmt.Errorf("record unarchived document: %w", uerr)
+			}
 			failed++
 			_ = e.repo.UpdateJobProgress(ctx, job.ID, total, done, failed)
 			continue
@@ -75,18 +110,9 @@ func (e *Engine) Run(ctx context.Context, job *models.SyncJob) error {
 			return fmt.Errorf("store %q: %w", key, err)
 		}
 
-		doc := &models.Document{
-			UserID:          job.UserID,
-			Provider:        acct.Provider,
-			ExternalID:      item.ExternalID,
-			Title:           item.Title,
-			DocType:         item.DocType,
-			Format:          blob.Format,
-			SourcePath:      item.SourcePath,
-			ObjectKey:       key,
-			SizeBytes:       int64(len(blob.Data)),
-			OwnerExternalID: item.OwnerID,
-		}
+		doc.Format = blob.Format
+		doc.ObjectKey = key
+		doc.SizeBytes = int64(len(blob.Data))
 		if err := e.repo.UpsertDocument(ctx, doc); err != nil {
 			return fmt.Errorf("record document: %w", err)
 		}

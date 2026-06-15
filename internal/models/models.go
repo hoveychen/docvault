@@ -78,3 +78,21 @@ type Document struct {
 	// doc, it is archived, and the original has not already been deleted.
 	Deletable bool `json:"deletable"`
 }
+
+// Folder is a source folder discovered during sync. Its cloud original can be
+// deleted (cascading to trash) only once everything under it is archived.
+type Folder struct {
+	ID              string     `json:"id"`
+	UserID          string     `json:"user_id"`
+	Provider        string     `json:"provider"`
+	ExternalID      string     `json:"external_id"` // folder token
+	Title           string     `json:"title"`
+	SourcePath      string     `json:"source_path"` // the folder's own full path
+	OwnerExternalID string     `json:"-"`
+	SyncedAt        time.Time  `json:"synced_at"`
+	SourceDeletedAt *time.Time `json:"source_deleted_at,omitempty"`
+
+	// Computed per request.
+	Deletable    bool   `json:"deletable"`
+	NotDeletable string `json:"not_deletable_reason,omitempty"` // why it can't be deleted
+}
