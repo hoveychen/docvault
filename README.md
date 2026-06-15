@@ -195,9 +195,3 @@ the same [`provider.Provider`](internal/provider/provider.go) interface; Feishu/
 spaces), object-storage archival, browse + streamed download, batch deletion of cloud originals
 (documents and whole folders, owner- and archival-gated, to trash), an admin backend (roles, ban,
 UI-managed connections of any type), and a production Docker stack.
-
-Known follow-ups: **end-to-end run against any real provider API (needs app credentials)** — the
-code compiles and is unit-tested but no live OAuth+sync has been run yet; confirm the Tencent
-`// UNVERIFIED:` details (export container, list `ownerID`); Microsoft **SharePoint** sites and
-Google **Shared Drives / "shared with me"** enumeration; Feishu `mindnote`/board export and
-Wiki/folder-object deletion.
