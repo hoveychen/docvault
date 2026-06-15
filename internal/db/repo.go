@@ -429,16 +429,17 @@ func (r *Repo) HasActiveJob(ctx context.Context, userID string) (bool, error) {
 
 // UpsertDocument records (or refreshes) an archived document by natural key.
 func (r *Repo) UpsertDocument(ctx context.Context, d *models.Document) error {
-	_, err := r.pool.Exec(ctx,
+	err := r.pool.QueryRow(ctx,
 		`INSERT INTO documents
 		   (user_id, provider, external_id, title, doc_type, format, source_path, object_key, size_bytes, owner_external_id, synced_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
 		 ON CONFLICT (user_id, provider, external_id) DO UPDATE SET
 		   title=EXCLUDED.title, doc_type=EXCLUDED.doc_type, format=EXCLUDED.format,
 		   source_path=EXCLUDED.source_path, object_key=EXCLUDED.object_key,
-		   size_bytes=EXCLUDED.size_bytes, owner_external_id=EXCLUDED.owner_external_id, synced_at=now()`,
+		   size_bytes=EXCLUDED.size_bytes, owner_external_id=EXCLUDED.owner_external_id, synced_at=now()
+		 RETURNING id`,
 		d.UserID, d.Provider, d.ExternalID, d.Title, d.DocType, d.Format,
-		d.SourcePath, d.ObjectKey, d.SizeBytes, d.OwnerExternalID)
+		d.SourcePath, d.ObjectKey, d.SizeBytes, d.OwnerExternalID).Scan(&d.ID)
 	return err
 }
 
