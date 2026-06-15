@@ -99,3 +99,31 @@ h2 { margin: 0 0 6px; font-size: 17px; }
 .docs input[type="checkbox"]:disabled { cursor: not-allowed; }
 
 .small-note { font-size: 13px; margin: 4px 0 0; }
+
+/* admin panel */
+.card.admin { border-color: #d9c089; background: #fffdf5; }
+.admin-block { margin-top: 16px; }
+.admin-block h3 { margin: 0 0 8px; font-size: 15px; }
+.admin-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.tag.muted-tag { background: #eef0f3; color: var(--muted); }
+.conn-form {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 460px;
+}
+.conn-form h4 { margin: 0; }
+.conn-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.conn-form input, .conn-form select {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--text);
+}
+.row { display: flex; align-items: center; gap: 10px; }

@@ -38,9 +38,18 @@ func (r *Repo) LinkAccount(ctx context.Context, p ProviderAccountUpsert) (userID
 
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
+		// The very first user to ever sign in becomes the initial admin.
+		role := "member"
+		var userCount int
+		if err = tx.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&userCount); err != nil {
+			return "", "", err
+		}
+		if userCount == 0 {
+			role = "admin"
+		}
 		if err = tx.QueryRow(ctx,
-			`INSERT INTO users(display_name, email, avatar_url) VALUES($1,$2,$3) RETURNING id`,
-			p.DisplayName, p.Email, p.AvatarURL,
+			`INSERT INTO users(display_name, email, avatar_url, role) VALUES($1,$2,$3,$4) RETURNING id`,
+			p.DisplayName, p.Email, p.AvatarURL, role,
 		).Scan(&userID); err != nil {
 			return "", "", err
 		}
@@ -93,15 +102,63 @@ type ProviderAccountUpsert struct {
 	RefreshTokenExpires time.Time
 }
 
-func (r *Repo) GetUser(ctx context.Context, id string) (*models.User, error) {
+const userCols = `SELECT id, display_name, email, avatar_url, role, banned, created_at FROM users`
+
+func scanUser(row pgx.Row) (*models.User, error) {
 	u := &models.User{}
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, display_name, email, avatar_url, created_at FROM users WHERE id=$1`, id,
-	).Scan(&u.ID, &u.DisplayName, &u.Email, &u.AvatarURL, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.DisplayName, &u.Email, &u.AvatarURL, &u.Role, &u.Banned, &u.CreatedAt)
+	return u, err
+}
+
+func (r *Repo) GetUser(ctx context.Context, id string) (*models.User, error) {
+	u, err := scanUser(r.pool.QueryRow(ctx, userCols+` WHERE id=$1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return u, err
+}
+
+// ListUsers returns all users (admin view), newest first.
+func (r *Repo) ListUsers(ctx context.Context) ([]models.User, error) {
+	rows, err := r.pool.Query(ctx, userCols+` ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
+// SetUserRole updates a user's role.
+func (r *Repo) SetUserRole(ctx context.Context, id, role string) error {
+	ct, err := r.pool.Exec(ctx, `UPDATE users SET role=$1 WHERE id=$2`, role, id)
+	if err == nil && ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
+}
+
+// SetUserBanned bans/unbans a user.
+func (r *Repo) SetUserBanned(ctx context.Context, id string, banned bool) error {
+	ct, err := r.pool.Exec(ctx, `UPDATE users SET banned=$1 WHERE id=$2`, banned, id)
+	if err == nil && ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
+}
+
+// CountAdmins returns how many non-banned admins exist (to prevent removing the last one).
+func (r *Repo) CountAdmins(ctx context.Context) (int, error) {
+	var n int
+	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM users WHERE role='admin' AND NOT banned`).Scan(&n)
+	return n, err
 }
 
 func (r *Repo) GetAccount(ctx context.Context, id string) (*models.ProviderAccount, error) {
@@ -443,4 +500,98 @@ func (r *Repo) MarkFolderTreeSourceDeleted(ctx context.Context, userID string, f
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// --- connections (admin-managed provider configs) ---
+
+// ConnectionConfig carries a connection plus its encrypted secret, for building
+// providers in the app layer (which holds the cipher).
+type ConnectionConfig struct {
+	Key          string
+	Label        string
+	AppID        string
+	Domain       string
+	AppSecretEnc string
+}
+
+// ListConnectionConfigs returns every connection with its encrypted secret.
+func (r *Repo) ListConnectionConfigs(ctx context.Context) ([]ConnectionConfig, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT key, label, app_id, domain, app_secret_enc FROM feishu_connections ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ConnectionConfig
+	for rows.Next() {
+		var c ConnectionConfig
+		if err := rows.Scan(&c.Key, &c.Label, &c.AppID, &c.Domain, &c.AppSecretEnc); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// ListConnections returns connections for the admin UI (no secrets).
+func (r *Repo) ListConnections(ctx context.Context) ([]models.Connection, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, key, label, app_id, domain, app_secret_enc <> '', created_at, updated_at
+		   FROM feishu_connections ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Connection
+	for rows.Next() {
+		var c models.Connection
+		if err := rows.Scan(&c.ID, &c.Key, &c.Label, &c.AppID, &c.Domain, &c.HasSecret,
+			&c.CreatedAt, &c.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repo) CountConnections(ctx context.Context) (int, error) {
+	var n int
+	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM feishu_connections`).Scan(&n)
+	return n, err
+}
+
+// CreateConnection inserts a new connection (secret already encrypted).
+func (r *Repo) CreateConnection(ctx context.Context, key, label, appID, domain, secretEnc string) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO feishu_connections(key, label, app_id, app_secret_enc, domain)
+		 VALUES($1,$2,$3,$4,$5)`,
+		key, label, appID, secretEnc, domain)
+	return err
+}
+
+// UpdateConnection updates a connection by id. A nil secretEnc keeps the existing secret.
+func (r *Repo) UpdateConnection(ctx context.Context, id, label, appID, domain string, secretEnc *string) error {
+	var ct interface{ RowsAffected() int64 }
+	var err error
+	if secretEnc != nil {
+		ct, err = r.pool.Exec(ctx,
+			`UPDATE feishu_connections SET label=$1, app_id=$2, domain=$3, app_secret_enc=$4, updated_at=now() WHERE id=$5`,
+			label, appID, domain, *secretEnc, id)
+	} else {
+		ct, err = r.pool.Exec(ctx,
+			`UPDATE feishu_connections SET label=$1, app_id=$2, domain=$3, updated_at=now() WHERE id=$4`,
+			label, appID, domain, id)
+	}
+	if err == nil && ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
+}
+
+func (r *Repo) DeleteConnection(ctx context.Context, id string) error {
+	ct, err := r.pool.Exec(ctx, `DELETE FROM feishu_connections WHERE id=$1`, id)
+	if err == nil && ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return err
 }

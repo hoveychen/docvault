@@ -100,6 +100,20 @@ needed. Just register the exact `http://localhost:8080/...` callback and set
 `DOCVAULT_PUBLIC_URL=http://localhost:8080`. For local testing use the single-origin mode
 (`pnpm build` + server on `:8080`); don't run OAuth through the Vite `:5173` dev port.
 
+## Admin backend
+
+- **The first user to ever sign in becomes the initial admin.** Everyone after is a member.
+- Admins see an **管理后台 / Admin** panel in the web UI to:
+  - **Manage members** — promote/demote between admin and member, ban/unban. Banned users are
+    blocked from the whole app; the last remaining admin can't be demoted or banned.
+  - **Manage connections** — add/edit/delete Feishu/Lark orgs (key, label, App ID, App Secret,
+    domain) *from the UI*. Connections live in the DB (secret encrypted at rest); the provider
+    registry hot-reloads on every change, so no restart is needed.
+- `DOCVAULT_FEISHU_CONNECTIONS` (or the single-app vars) is only a **seed**: on first boot, when
+  the connections table is empty, env connections are imported into the DB. After that, the DB is
+  the source of truth and you manage orgs in the admin UI. Remember to register each connection's
+  redirect URL (`<PUBLIC_URL>/api/auth/<key>/callback`) in that org's app console.
+
 ## Deploy
 
 One image, one compose file — see [docs/deploy.md](docs/deploy.md):
@@ -132,6 +146,13 @@ web/            React/Vite frontend
 
 ## Status
 
-MVP. Implemented end to end: Feishu OAuth login, recursive drive listing, export of
-`docx`/`doc`/`sheet`, object-storage archival, browse + pre-signed download. Known follow-ups:
-binary file download, `bitable`/`slides`/`mindnote` export, Wiki spaces, and additional providers.
+Implemented: Feishu/Lark OAuth login (multi-org), recursive drive sync (`docx`/`doc`/`sheet`/
+`bitable`/`slides` export + binary files + Wiki spaces), object-storage archival, browse +
+pre-signed download, batch deletion of cloud originals (documents and whole folders, owner- and
+archival-gated, to trash), an admin backend (roles, ban, UI-managed connections), and a production
+Docker stack.
+
+Known follow-ups: end-to-end run against the real Feishu/Lark API (needs app credentials),
+"shared with me" sync (no clean enumerate API), `mindnote`/board export, Wiki/folder-object
+deletion, and additional providers (Google Workspace / Office 365) behind the same
+[`provider.Provider`](internal/provider/provider.go) interface.

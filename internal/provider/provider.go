@@ -4,6 +4,7 @@ package provider
 
 import (
 	"context"
+	"sync"
 	"time"
 )
 
@@ -72,24 +73,41 @@ type Provider interface {
 	Delete(ctx context.Context, tok *Token, item Item) error
 }
 
-// Registry holds the configured providers by key.
+// Registry holds the configured providers by key. It is safe for concurrent use
+// and can be hot-reloaded (Replace) when an admin edits connections.
 type Registry struct {
+	mu        sync.RWMutex
 	providers map[string]Provider
 }
 
 func NewRegistry(ps ...Provider) *Registry {
+	r := &Registry{providers: map[string]Provider{}}
+	r.Replace(ps)
+	return r
+}
+
+// Replace atomically swaps the registered providers.
+func (r *Registry) Replace(ps []Provider) {
 	m := make(map[string]Provider, len(ps))
 	for _, p := range ps {
 		m[p.Key()] = p
 	}
-	return &Registry{providers: m}
+	r.mu.Lock()
+	r.providers = m
+	r.mu.Unlock()
 }
 
 // Get returns the provider for key, or nil.
-func (r *Registry) Get(key string) Provider { return r.providers[key] }
+func (r *Registry) Get(key string) Provider {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.providers[key]
+}
 
 // Keys lists registered provider keys.
 func (r *Registry) Keys() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]string, 0, len(r.providers))
 	for k := range r.providers {
 		out = append(out, k)
@@ -105,6 +123,8 @@ type Info struct {
 
 // List returns key+label for every registered provider.
 func (r *Registry) List() []Info {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]Info, 0, len(r.providers))
 	for _, p := range r.providers {
 		out = append(out, Info{Key: p.Key(), Label: p.Label()})

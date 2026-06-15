@@ -26,6 +26,7 @@ type App struct {
 	Registry *provider.Registry
 	Tokens   *auth.TokenManager
 	Sessions *auth.SessionManager
+	Cipher   *crypto.Cipher
 	Log      *slog.Logger
 }
 
@@ -53,18 +54,10 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, err
 		return nil, fmt.Errorf("token cipher: %w", err)
 	}
 
-	var provs []provider.Provider
-	for _, conn := range cfg.FeishuConnections {
-		provs = append(provs, feishu.New(conn))
-		log.Info("provider enabled", "provider", conn.Key, "domain", conn.Domain, "label", conn.Label)
-	}
-	if len(provs) == 0 {
-		log.Warn("no feishu/lark connections configured")
-	}
-	registry := provider.NewRegistry(provs...)
-
 	repo := db.NewRepo(pool)
-	return &App{
+	registry := provider.NewRegistry()
+
+	a := &App{
 		Config:   cfg,
 		Pool:     pool,
 		Repo:     repo,
@@ -72,8 +65,70 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, err
 		Registry: registry,
 		Tokens:   auth.NewTokenManager(repo, cipher, registry),
 		Sessions: auth.NewSessionManager(cfg.JWTSecret),
+		Cipher:   cipher,
 		Log:      log,
-	}, nil
+	}
+
+	// Seed DB connections from env on first run (table empty), then load providers.
+	if err := a.seedConnectionsFromEnv(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("seed connections: %w", err)
+	}
+	if err := a.ReloadProviders(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("load providers: %w", err)
+	}
+	return a, nil
+}
+
+// seedConnectionsFromEnv imports env-configured connections into the DB the first
+// time (when the table is empty), so existing deployments migrate seamlessly and
+// admins can thereafter manage connections from the web UI.
+func (a *App) seedConnectionsFromEnv(ctx context.Context) error {
+	if len(a.Config.FeishuConnections) == 0 {
+		return nil
+	}
+	n, err := a.Repo.CountConnections(ctx)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	for _, conn := range a.Config.FeishuConnections {
+		secretEnc, err := a.Cipher.Encrypt(conn.AppSecret)
+		if err != nil {
+			return err
+		}
+		if err := a.Repo.CreateConnection(ctx, conn.Key, conn.Label, conn.AppID, conn.Domain, secretEnc); err != nil {
+			return err
+		}
+		a.Log.Info("seeded connection from env", "key", conn.Key)
+	}
+	return nil
+}
+
+// ReloadProviders rebuilds the provider registry from DB connections. Called at
+// startup and whenever an admin changes connections.
+func (a *App) ReloadProviders(ctx context.Context) error {
+	cfgs, err := a.Repo.ListConnectionConfigs(ctx)
+	if err != nil {
+		return err
+	}
+	var provs []provider.Provider
+	for _, c := range cfgs {
+		secret, err := a.Cipher.Decrypt(c.AppSecretEnc)
+		if err != nil {
+			a.Log.Error("decrypt connection secret failed", "key", c.Key, "err", err)
+			continue
+		}
+		provs = append(provs, feishu.New(config.FeishuConnection{
+			Key: c.Key, Label: c.Label, AppID: c.AppID, AppSecret: secret, Domain: c.Domain,
+		}))
+	}
+	a.Registry.Replace(provs)
+	a.Log.Info("providers loaded", "count", len(provs))
+	return nil
 }
 
 // Close releases resources.
