@@ -31,8 +31,10 @@ func NewEngine(repo *db.Repo, tokens *auth.TokenManager, registry *provider.Regi
 
 // SliceBudget bounds how long RunSlice keeps starting new items before yielding
 // the worker back to the queue. Kept well under the worker's per-slice ctx cap so
-// a normal slice ends by yielding, never by ctx cancellation.
-const SliceBudget = 5 * time.Minute
+// a normal slice ends by yielding, never by ctx cancellation. A var so tests can
+// shrink it; every slice still processes at least one item (see RunSlice) so a
+// tiny budget can never stall the job — it just yields after each item.
+var SliceBudget = 5 * time.Minute
 
 // pendingBatch is how many pending items RunSlice pulls per DB round-trip.
 const pendingBatch = 50
@@ -87,8 +89,16 @@ func (e *Engine) RunSlice(ctx context.Context, job *models.SyncJob) (complete bo
 		e.syncProgress(ctx, job.ID) // surface total_items immediately
 	}
 
+	// Process pending items until the budget elapses or none remain. At least one
+	// item is always processed per slice (the budget check is gated on
+	// processedAny) so even a tiny budget guarantees forward progress and can
+	// never leave the job re-queuing without advancing.
 	deadline := time.Now().Add(SliceBudget)
-	for time.Now().Before(deadline) {
+	processedAny := false
+	for {
+		if processedAny && !time.Now().Before(deadline) {
+			break
+		}
 		if err := ctx.Err(); err != nil {
 			return false, err
 		}
@@ -100,7 +110,7 @@ func (e *Engine) RunSlice(ctx context.Context, job *models.SyncJob) (complete bo
 			break // nothing left to do this slice
 		}
 		for _, it := range batch {
-			if !time.Now().Before(deadline) {
+			if processedAny && !time.Now().Before(deadline) {
 				break
 			}
 			if err := ctx.Err(); err != nil {
@@ -114,6 +124,7 @@ func (e *Engine) RunSlice(ctx context.Context, job *models.SyncJob) (complete bo
 			if err := e.processItem(ctx, job, acct.Provider, prov, tok, it); err != nil {
 				return false, err
 			}
+			processedAny = true
 		}
 	}
 
