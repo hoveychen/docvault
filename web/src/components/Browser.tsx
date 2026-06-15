@@ -12,6 +12,7 @@ import {
   Home,
   LayoutGrid,
   List as ListIcon,
+  Paperclip,
   RefreshCw,
   Search,
   SearchX,
@@ -538,6 +539,14 @@ function DocRow({
         <div className="file-row__name">
           <v.Icon color={v.color} />
           <span>{doc.title}</span>
+          {doc.attachments && doc.attachments.length > 0 && (
+            <Tooltip label={`${doc.attachments.length} 个内嵌附件`}>
+              <span className="file-row__attach">
+                <Paperclip size={13} />
+                {doc.attachments.length}
+              </span>
+            </Tooltip>
+          )}
         </div>
       </td>
       <td>

@@ -198,6 +198,20 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.file-row__attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.file-row__attach svg {
+  width: 13px;
+  height: 13px;
+}
 .col-chk {
   width: 38px;
   padding-right: 0 !important;
