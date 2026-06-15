@@ -33,8 +33,19 @@ func TestAuthCodeURLIncludesAppID(t *testing.T) {
 	if q.Get("state") != "state-xyz" {
 		t.Errorf("state wrong: %q", q.Get("state"))
 	}
-	if q.Get("scope") == "" {
+	scope := q.Get("scope")
+	if scope == "" {
 		t.Error("scope missing")
+	}
+	// docs:document:readonly is not a valid Lark scope (error 20043); make sure we
+	// don't request it.
+	if strings.Contains(scope, "docs:document") {
+		t.Errorf("must not request invalid scope docs:document; got %q", scope)
+	}
+	for _, want := range []string{"drive:drive:readonly", "wiki:wiki:readonly"} {
+		if !strings.Contains(scope, want) {
+			t.Errorf("scope missing %q; got %q", want, scope)
+		}
 	}
 }
 
