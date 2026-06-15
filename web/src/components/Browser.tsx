@@ -13,17 +13,22 @@ import {
   LayoutGrid,
   List as ListIcon,
   RefreshCw,
+  Search,
+  SearchX,
   Trash2,
   X,
 } from "lucide-react";
 import { api, type DocItem } from "../api";
 import { useVault } from "../lib/vault";
-import { crumbs } from "../lib/tree";
+import { crumbs, normalizePath } from "../lib/tree";
 import { browseUrl } from "../lib/routes";
 import { fileVisual } from "../lib/fileType";
 import { formatRelative, formatSize } from "../lib/format";
 import type { TreeFolder } from "../lib/tree";
-import { Badge, Button, IconButton, Skeleton, Spinner, Tooltip } from "./ui";
+import { Badge, Button, IconButton, Input, Skeleton, Spinner, Tooltip } from "./ui";
+
+const docKey = (d: Pick<DocItem, "format" | "doc_type">) =>
+  (d.format || d.doc_type || "").toLowerCase();
 
 type Mode = "folder" | "recent" | "source" | "trash";
 type SortKey = "name" | "size" | "date";
@@ -50,18 +55,22 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
   const [selDocs, setSelDocs] = useState<Set<string>>(new Set());
   const [selFolders, setSelFolders] = useState<Set<string>>(new Set());
   const [working, setWorking] = useState(false);
+  const [query, setQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
 
   const setViewPersist = (v: View) => {
     setView(v);
     localStorage.setItem(VIEW_KEY, v);
   };
 
-  // Resolve the folders + docs to show for this mode.
-  const folders: TreeFolder[] = mode === "folder" ? tree.childFolders(path) : [];
-  const rawDocs: DocItem[] = useMemo(() => {
+  const q = query.trim().toLowerCase();
+  const searching = q !== "" || typeFilter !== "";
+
+  // The set of docs in scope for this mode, before search/type filtering.
+  const scopeDocs: DocItem[] = useMemo(() => {
     switch (mode) {
       case "folder":
-        return tree.childDocs(path);
+        return searching ? docs : tree.childDocs(path);
       case "recent":
         return [...docs].sort((a, b) => (a.synced_at < b.synced_at ? 1 : -1)).slice(0, 200);
       case "source":
@@ -71,7 +80,37 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
       default:
         return [];
     }
-  }, [mode, path, provider, docs, tree]);
+  }, [mode, path, provider, docs, tree, searching]);
+
+  // Type-filter options drawn from the docs in scope.
+  const typeOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const d of scopeDocs) {
+      const k = docKey(d);
+      if (k) set.add(k);
+    }
+    return [...set].sort();
+  }, [scopeDocs]);
+
+  const rawDocs: DocItem[] = useMemo(() => {
+    let arr = scopeDocs;
+    if (q) arr = arr.filter((d) => d.title.toLowerCase().includes(q));
+    if (typeFilter) arr = arr.filter((d) => docKey(d) === typeFilter);
+    return arr;
+  }, [scopeDocs, q, typeFilter]);
+
+  // Folders: normal tree children when browsing a folder; name matches when searching.
+  const folders: TreeFolder[] = useMemo(() => {
+    if (mode === "folder" && !searching) return tree.childFolders(path);
+    if (mode === "folder" && q && !typeFilter) {
+      return vault.folders
+        .filter((f) => f.title.toLowerCase().includes(q))
+        .map((f) => ({ path: normalizePath(f.source_path), name: f.title, folder: f }));
+    }
+    return [];
+  }, [mode, path, searching, q, typeFilter, tree, vault.folders]);
+
+  const showFolderColForced = mode !== "folder" || searching;
 
   const sortedDocs = useMemo(() => {
     const arr = [...rawDocs];
@@ -187,6 +226,47 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
         </div>
       </div>
 
+      <div className="toolbar">
+        <Input
+          icon={Search}
+          placeholder={searching ? "在全部归档中搜索…" : "搜索文件…"}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ width: 240 }}
+        />
+        {typeOptions.length > 1 && (
+          <select
+            className="input-wrap"
+            style={{ height: 32 }}
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+          >
+            <option value="">全部类型</option>
+            {typeOptions.map((t) => (
+              <option key={t} value={t}>
+                {t.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        )}
+        <span className="toolbar__spacer" />
+        {searching && (
+          <span className="text-tertiary" style={{ fontSize: 12.5 }}>
+            {sortedFolders.length + sortedDocs.length} 个结果
+            <button
+              className="btn btn--ghost btn--sm"
+              style={{ marginLeft: 8 }}
+              onClick={() => {
+                setQuery("");
+                setTypeFilter("");
+              }}
+            >
+              清除
+            </button>
+          </span>
+        )}
+      </div>
+
       <SyncBanner />
 
       <div className="page-body">
@@ -194,7 +274,11 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
           {loading ? (
             <ListSkeleton />
           ) : sortedFolders.length === 0 && sortedDocs.length === 0 ? (
-            <EmptyState mode={mode} isRoot={mode === "folder" && !path} totalDocs={docs.length} onSync={vault.startSync} syncing={vault.syncing} />
+            searching ? (
+              <SearchEmpty />
+            ) : (
+              <EmptyState mode={mode} isRoot={mode === "folder" && !path} totalDocs={docs.length} onSync={vault.startSync} syncing={vault.syncing} />
+            )
           ) : view === "list" ? (
             <ListView
               folders={sortedFolders}
@@ -210,7 +294,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
               someSelected={someSelected}
               hasDeletable={deletableDocs.length > 0}
               onOpenFolder={(p) => navigate(browseUrl(p))}
-              showFolderCol={mode !== "folder"}
+              showFolderCol={showFolderColForced}
             />
           ) : (
             <GridView
@@ -617,6 +701,18 @@ function EmptyState({
       <div className="empty__desc">
         {mode === "source" ? "该来源下还没有归档文档。" : "此文件夹为空。"}
       </div>
+    </div>
+  );
+}
+
+function SearchEmpty() {
+  return (
+    <div className="empty">
+      <span className="empty__icon">
+        <SearchX />
+      </span>
+      <div className="empty__title">没有匹配的文件</div>
+      <div className="empty__desc">换个关键词，或清除筛选条件再试。</div>
     </div>
   );
 }
