@@ -70,7 +70,10 @@ func (p *Provider) AuthCodeURL(state, redirectURI string) string {
 	q.Set("redirect_uri", redirectURI)
 	q.Set("state", state)
 	// Read-only scopes sufficient to list + export drive documents and wiki nodes.
-	q.Set("scope", "drive:drive:readonly docs:document:readonly wiki:wiki:readonly")
+	// drive:drive:readonly covers listing, export tasks and downloads. (Deleting
+	// cloud originals additionally needs the writable drive:drive scope granted in
+	// the app console; docs:document:readonly is NOT a valid Lark scope — error 20043.)
+	q.Set("scope", "drive:drive:readonly wiki:wiki:readonly")
 	return fmt.Sprintf("%s/open-apis/authen/v1/authorize?%s", p.baseURL, q.Encode())
 }
 
