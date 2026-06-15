@@ -7,6 +7,7 @@ import {
   type SyncStatus,
   type User,
 } from "./api";
+import { AdminPanel } from "./Admin";
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -181,6 +182,8 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
       </header>
 
       <main className="content">
+        {user.role === "admin" && <AdminPanel meId={user.id} />}
+
         <section className="card">
           <div className="row spread">
             <div>

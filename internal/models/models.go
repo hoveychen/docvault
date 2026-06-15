@@ -3,6 +3,12 @@ package models
 
 import "time"
 
+// Roles for docvault accounts.
+const (
+	RoleAdmin  = "admin"
+	RoleMember = "member"
+)
+
 // User is a docvault account. Identity is derived from the first provider the user
 // authorizes; additional provider accounts can be linked to the same user later.
 type User struct {
@@ -10,7 +16,25 @@ type User struct {
 	DisplayName string    `json:"display_name"`
 	Email       string    `json:"email"`
 	AvatarURL   string    `json:"avatar_url"`
+	Role        string    `json:"role"`   // "admin" | "member"
+	Banned      bool      `json:"banned"` // banned users cannot access the system
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+// IsAdmin reports whether the user has the admin role.
+func (u *User) IsAdmin() bool { return u.Role == RoleAdmin }
+
+// Connection is a DB-stored Feishu/Lark org connection, editable by admins. The
+// app secret is never serialized to clients (HasSecret signals whether one is set).
+type Connection struct {
+	ID        string    `json:"id"`
+	Key       string    `json:"key"`
+	Label     string    `json:"label"`
+	AppID     string    `json:"app_id"`
+	Domain    string    `json:"domain"`
+	HasSecret bool      `json:"has_secret"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ProviderAccount is a user's OAuth link to one cloud-document provider.

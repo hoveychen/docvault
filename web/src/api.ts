@@ -5,6 +5,26 @@ export interface User {
   display_name: string;
   email: string;
   avatar_url: string;
+  role: string;
+  banned: boolean;
+  created_at?: string;
+}
+
+export interface Connection {
+  id: string;
+  key: string;
+  label: string;
+  app_id: string;
+  domain: string;
+  has_secret: boolean;
+}
+
+export interface ConnectionInput {
+  key?: string;
+  label: string;
+  app_id: string;
+  app_secret: string;
+  domain: string;
 }
 
 export interface DocItem {
@@ -81,4 +101,24 @@ export const api = {
     }),
   loginUrl: (provider: string) => `/api/auth/${provider}/login`,
   downloadUrl: (id: string) => `/api/documents/${id}/download`,
+
+  // --- admin ---
+  adminUsers: () => req<{ users: User[] }>("/api/admin/users"),
+  adminUserAction: (id: string, action: "promote" | "demote" | "ban" | "unban") =>
+    req<{ status: string }>(`/api/admin/users/${id}/${action}`, { method: "POST" }),
+  adminConnections: () => req<{ connections: Connection[] }>("/api/admin/connections"),
+  adminCreateConnection: (c: ConnectionInput) =>
+    req<{ status: string }>("/api/admin/connections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(c),
+    }),
+  adminUpdateConnection: (id: string, c: ConnectionInput) =>
+    req<{ status: string }>(`/api/admin/connections/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(c),
+    }),
+  adminDeleteConnection: (id: string) =>
+    req<{ status: string }>(`/api/admin/connections/${id}`, { method: "DELETE" }),
 };
