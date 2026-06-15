@@ -91,12 +91,17 @@ const en = {
     emptyFolderDesc: "This folder is empty.",
     searchEmptyTitle: "No matching files",
     searchEmptyDesc: "Try a different keyword or clear the filters.",
+    attachmentCount_one: "{{count}} embedded attachment",
+    attachmentCount_other: "{{count}} embedded attachments",
   },
   preview: {
     loadFailed: "Failed to load",
     renderFailed: "Failed to render",
     unsupported: "This format can't be previewed online yet",
     downloadFile: "Download file",
+    attachmentsLabel: "Embedded attachments · {{count}}",
+    downloadAttachment: "Download {{name}}",
+    attachmentFallback: "Attachment",
   },
   admin: {
     title: "Admin",

@@ -207,7 +207,52 @@ func (e *Engine) processItem(ctx context.Context, job *models.SyncJob, providerK
 	if err := e.repo.UpsertDocument(ctx, doc); err != nil {
 		return fmt.Errorf("record document: %w", err)
 	}
+
+	// Embedded objects (e.g. Feishu file-attachment blocks) aren't part of the
+	// main export; pull and store them as sidecars when the provider supports it.
+	// Best-effort: a fetch/store failure here is logged but never fails the item —
+	// the document itself is already archived above.
+	e.fetchAttachments(ctx, providerKey, prov, tok, item, doc)
+
 	return e.repo.MarkJobItem(ctx, it.ID, models.JobItemDone, "")
+}
+
+// fetchAttachments downloads a document's embedded objects (if the provider
+// implements provider.AttachmentExporter) and stores each as a sidecar object
+// recorded in document_attachments. Everything here is best-effort and never
+// surfaces an error: the parent document is already archived by the caller.
+func (e *Engine) fetchAttachments(ctx context.Context, providerKey string, prov provider.Provider, tok *provider.Token, item provider.Item, doc *models.Document) {
+	ae, ok := prov.(provider.AttachmentExporter)
+	if !ok {
+		return
+	}
+	atts, err := ae.Attachments(ctx, tok, item)
+	if err != nil {
+		e.log.Warn("fetch attachments failed", "title", item.Title, "doc_type", item.DocType, "err", err)
+		return
+	}
+	for _, att := range atts {
+		if att.Blob == nil {
+			continue
+		}
+		key := attachmentKey(doc.UserID, providerKey, item.ExternalID, att.ExternalID, att.Blob.Filename)
+		if err := e.store.Put(ctx, key, att.Blob.Data, att.Blob.ContentType); err != nil {
+			e.log.Warn("store attachment failed", "doc", item.ExternalID, "file", att.Blob.Filename, "err", err)
+			continue
+		}
+		rec := &models.Attachment{
+			DocumentID:  doc.ID,
+			ExternalID:  att.ExternalID,
+			Filename:    att.Blob.Filename,
+			Format:      att.Blob.Format,
+			ContentType: att.Blob.ContentType,
+			ObjectKey:   key,
+			SizeBytes:   int64(len(att.Blob.Data)),
+		}
+		if err := e.repo.UpsertAttachment(ctx, rec); err != nil {
+			e.log.Warn("record attachment failed", "doc", item.ExternalID, "file", att.Blob.Filename, "err", err)
+		}
+	}
 }
 
 // syncProgress mirrors the work-list counts onto the job row for the UI.
@@ -222,6 +267,13 @@ func (e *Engine) syncProgress(ctx context.Context, jobID string) {
 
 func objectKey(userID, providerKey, externalID, filename string) string {
 	return path.Join("u", userID, providerKey, externalID, filename)
+}
+
+// attachmentKey places an embedded object under its parent document's prefix,
+// namespaced by the attachment's own token so multiple attachments (or ones with
+// duplicate filenames) never collide.
+func attachmentKey(userID, providerKey, docExternalID, attExternalID, filename string) string {
+	return path.Join("u", userID, providerKey, docExternalID, "media", attExternalID, filename)
 }
 
 // Worker polls the queue and runs claimed jobs until the context is cancelled.

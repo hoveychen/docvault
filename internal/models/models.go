@@ -127,6 +127,24 @@ type Document struct {
 	// Deletable is computed per request: true when the signed-in user owns the
 	// doc, it is archived, and the original has not already been deleted.
 	Deletable bool `json:"deletable"`
+	// Attachments is computed per request: the embedded objects (e.g. Feishu
+	// file-attachment blocks) stored as sidecars for this document.
+	Attachments []Attachment `json:"attachments,omitempty"`
+}
+
+// Attachment is an embedded object (e.g. a Feishu file-attachment block) that
+// the parent document's main export does not include. It is stored as a sidecar
+// object and linked back to its document.
+type Attachment struct {
+	ID          string    `json:"id"`
+	DocumentID  string    `json:"document_id"`
+	ExternalID  string    `json:"-"` // provider media/file token (dedupe key)
+	Filename    string    `json:"filename"`
+	Format      string    `json:"format"`
+	ContentType string    `json:"-"`
+	ObjectKey   string    `json:"-"`
+	SizeBytes   int64     `json:"size_bytes"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Folder is a source folder discovered during sync. Its cloud original can be

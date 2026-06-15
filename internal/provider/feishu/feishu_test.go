@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	larkdocx "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
+
 	"github.com/hoveychen/docvault/internal/config"
 )
 
@@ -101,7 +103,7 @@ func TestAuthCodeURLIncludesAppID(t *testing.T) {
 	// Exporting native docs (docx/sheet/bitable) to portable files goes through
 	// Lark's export-task API, which requires drive:export:readonly — without it the
 	// task returns 99991679 Unauthorized and every native doc fails to archive.
-	for _, want := range []string{"drive:drive:readonly", "wiki:wiki:readonly", "drive:export:readonly"} {
+	for _, want := range []string{"drive:drive:readonly", "wiki:wiki:readonly", "drive:export:readonly", "docx:document:readonly"} {
 		if !strings.Contains(scope, want) {
 			t.Errorf("scope missing %q; got %q", want, scope)
 		}
@@ -111,4 +113,30 @@ func TestAuthCodeURLIncludesAppID(t *testing.T) {
 func parse(t *testing.T, raw string) (*url.URL, error) {
 	t.Helper()
 	return url.Parse(raw)
+}
+
+// collectFileTokens must pick up file-attachment blocks (the ones the export
+// task drops) by token, carry their filename, skip image blocks (already baked
+// into the .docx), and tolerate nil/empty-token blocks without panicking.
+func TestCollectFileTokens(t *testing.T) {
+	str := func(s string) *string { return &s }
+	blocks := []*larkdocx.Block{
+		nil, // defensive: nil entry must be skipped
+		{File: &larkdocx.File{Token: str("file_tok_1"), Name: str("report.pdf")}},
+		{Image: &larkdocx.Image{Token: str("img_tok_should_be_ignored")}}, // image: skip
+		{File: &larkdocx.File{Token: str("")}},                            // empty token: skip
+		{File: &larkdocx.File{Token: str("file_tok_2")}},                  // no name is fine
+		{}, // block with no File/Image: skip
+	}
+
+	got := collectFileTokens(blocks)
+	if len(got) != 2 {
+		t.Fatalf("want 2 attachment refs, got %d: %+v", len(got), got)
+	}
+	if got[0].token != "file_tok_1" || got[0].name != "report.pdf" {
+		t.Errorf("first ref wrong: %+v", got[0])
+	}
+	if got[1].token != "file_tok_2" || got[1].name != "" {
+		t.Errorf("second ref wrong: %+v", got[1])
+	}
 }

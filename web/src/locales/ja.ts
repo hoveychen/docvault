@@ -90,12 +90,16 @@ const ja = {
     emptyFolderDesc: "このフォルダは空です。",
     searchEmptyTitle: "一致するファイルがありません",
     searchEmptyDesc: "別のキーワードを試すか、フィルターを解除してください。",
+    attachmentCount_other: "{{count}} 件の埋め込み添付",
   },
   preview: {
     loadFailed: "読み込みに失敗しました",
     renderFailed: "表示に失敗しました",
     unsupported: "この形式はまだオンラインプレビューに対応していません",
     downloadFile: "ファイルをダウンロード",
+    attachmentsLabel: "埋め込み添付 · {{count}}",
+    downloadAttachment: "{{name}} をダウンロード",
+    attachmentFallback: "添付ファイル",
   },
   admin: {
     title: "管理画面",

@@ -90,12 +90,16 @@ const zh = {
     emptyFolderDesc: "此文件夹为空。",
     searchEmptyTitle: "没有匹配的文件",
     searchEmptyDesc: "换个关键词，或清除筛选条件再试。",
+    attachmentCount_other: "{{count}} 个内嵌附件",
   },
   preview: {
     loadFailed: "加载失败",
     renderFailed: "渲染失败",
     unsupported: "该格式暂不支持在线预览",
     downloadFile: "下载文件",
+    attachmentsLabel: "内嵌附件 · {{count}}",
+    downloadAttachment: "下载 {{name}}",
+    attachmentFallback: "附件",
   },
   admin: {
     title: "管理后台",
