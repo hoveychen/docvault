@@ -45,6 +45,7 @@ var contentTypes = map[string]string{
 type Provider struct {
 	key     string
 	label   string
+	appID   string
 	client  *lark.Client
 	baseURL string // open.feishu.cn or open.larksuite.com base
 }
@@ -56,7 +57,7 @@ func New(conn config.FeishuConnection) *Provider {
 		baseURL = lark.LarkBaseUrl
 	}
 	client := lark.NewClient(conn.AppID, conn.AppSecret, lark.WithOpenBaseUrl(baseURL))
-	return &Provider{key: conn.Key, label: conn.Label, client: client, baseURL: baseURL}
+	return &Provider{key: conn.Key, label: conn.Label, appID: conn.AppID, client: client, baseURL: baseURL}
 }
 
 func (p *Provider) Key() string   { return p.key }
@@ -65,6 +66,7 @@ func (p *Provider) Label() string { return p.label }
 // AuthCodeURL builds the authorization redirect (Feishu authen v1, scope-aware).
 func (p *Provider) AuthCodeURL(state, redirectURI string) string {
 	q := url.Values{}
+	q.Set("app_id", p.appID) // required by Feishu/Lark to identify the app
 	q.Set("redirect_uri", redirectURI)
 	q.Set("state", state)
 	// Read-only scopes sufficient to list + export drive documents and wiki nodes.
