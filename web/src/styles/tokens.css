@@ -1,0 +1,106 @@
+/* docvault design tokens — Linear-inspired.
+   Two themes selected via <html data-theme="dark|light">. Semantic variables
+   keep component CSS theme-agnostic. */
+
+:root {
+  /* Accent (shared across themes) */
+  --accent: #5e6ad2;
+  --accent-hover: #6e79de;
+  --accent-active: #525de0;
+  --accent-fg: #ffffff;
+  --accent-subtle: rgba(94, 106, 210, 0.16);
+  --accent-subtle-fg: #9aa4f2;
+
+  /* Status (shared) */
+  --danger: #eb5757;
+  --danger-hover: #ef6a6a;
+  --danger-subtle: rgba(235, 87, 87, 0.14);
+  --success: #57b894;
+  --success-subtle: rgba(87, 184, 148, 0.16);
+  --warning: #e0a843;
+  --warning-subtle: rgba(224, 168, 67, 0.16);
+
+  /* Radii */
+  --r-sm: 5px;
+  --r-md: 7px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-full: 999px;
+
+  /* Spacing scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* Typography */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Layout */
+  --sidebar-w: 248px;
+  --topbar-h: 52px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --t-fast: 120ms var(--ease);
+  --t-med: 180ms var(--ease);
+}
+
+:root[data-theme="dark"] {
+  --bg-app: #0b0c0e;
+  --bg-sidebar: #0f1011;
+  --bg-elevated: #161719;
+  --bg-elevated-2: #1c1d20;
+  --bg-input: #1a1b1e;
+  --bg-hover: rgba(255, 255, 255, 0.045);
+  --bg-active: rgba(255, 255, 255, 0.075);
+  --bg-selected: rgba(94, 106, 210, 0.14);
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+  --border-focus: var(--accent);
+
+  --text: #f2f3f5;
+  --text-secondary: #9b9fa7;
+  --text-tertiary: #6a6e76;
+  --text-on-accent: #ffffff;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.07);
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --bg-app: #ffffff;
+  --bg-sidebar: #fbfbfc;
+  --bg-elevated: #ffffff;
+  --bg-elevated-2: #f7f8f9;
+  --bg-input: #ffffff;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(0, 0, 0, 0.065);
+  --bg-selected: rgba(94, 106, 210, 0.1);
+
+  --border: rgba(0, 0, 0, 0.09);
+  --border-strong: rgba(0, 0, 0, 0.15);
+  --border-focus: var(--accent);
+
+  --text: #16171a;
+  --text-secondary: #61656d;
+  --text-tertiary: #999da5;
+  --text-on-accent: #ffffff;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.16), 0 0 0 1px rgba(0, 0, 0, 0.06);
+
+  --accent-subtle-fg: #4a55c0;
+
+  color-scheme: light;
+}

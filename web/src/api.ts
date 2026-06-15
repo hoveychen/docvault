@@ -34,6 +34,7 @@ export interface DocItem {
   doc_type: string;
   format: string;
   source_path: string;
+  object_key: string; // empty when the item wasn't archived (unsupported type / export failed)
   size_bytes: number;
   synced_at: string;
   deletable: boolean;
