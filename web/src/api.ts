@@ -71,6 +71,22 @@ export interface SyncStatus {
   finished_at?: string | null;
 }
 
+export interface TypeStat {
+  doc_type: string;
+  total: number;
+  archived: number;
+  unarchived: number;
+}
+
+export interface ArchiveStats {
+  total: number;
+  archived: number;
+  unarchived: number;
+  source_deleted: number;
+  folders: number;
+  by_type: TypeStat[];
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { credentials: "include", ...init });
   if (!res.ok) {
@@ -82,6 +98,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   me: () => req<User>("/api/me"),
+  stats: () => req<ArchiveStats>("/api/stats"),
   providers: () => req<{ providers: ProviderInfo[] }>("/api/providers"),
   documents: () => req<{ documents: DocItem[] }>("/api/documents"),
   folders: () => req<{ folders: FolderItem[] }>("/api/folders"),

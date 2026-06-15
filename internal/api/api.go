@@ -39,6 +39,7 @@ func NewRouter(a *app.App) http.Handler {
 	mux.HandleFunc("POST /api/auth/logout", h.logout)
 
 	mux.Handle("GET /api/me", h.requireUser(h.me))
+	mux.Handle("GET /api/stats", h.requireUser(h.archiveStats))
 	mux.Handle("GET /api/documents", h.requireUser(h.listDocuments))
 	mux.Handle("GET /api/documents/{id}/download", h.requireUser(h.downloadDocument))
 	mux.Handle("POST /api/documents/delete-source", h.requireUser(h.deleteSource))
@@ -168,6 +169,16 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, user)
+}
+
+// archiveStats returns the signed-in user's archived/unarchived breakdown.
+func (h *Handler) archiveStats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.app.Repo.ArchiveStats(r.Context(), userIDFrom(r))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stats failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
 }
 
 func (h *Handler) listDocuments(w http.ResponseWriter, r *http.Request) {
