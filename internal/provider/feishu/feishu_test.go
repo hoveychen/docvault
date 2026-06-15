@@ -98,7 +98,10 @@ func TestAuthCodeURLIncludesAppID(t *testing.T) {
 	if strings.Contains(scope, "docs:document") {
 		t.Errorf("must not request invalid scope docs:document; got %q", scope)
 	}
-	for _, want := range []string{"drive:drive:readonly", "wiki:wiki:readonly"} {
+	// Exporting native docs (docx/sheet/bitable) to portable files goes through
+	// Lark's export-task API, which requires drive:export:readonly — without it the
+	// task returns 99991679 Unauthorized and every native doc fails to archive.
+	for _, want := range []string{"drive:drive:readonly", "wiki:wiki:readonly", "drive:export:readonly"} {
 		if !strings.Contains(scope, want) {
 			t.Errorf("scope missing %q; got %q", want, scope)
 		}

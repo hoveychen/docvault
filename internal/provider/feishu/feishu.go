@@ -117,11 +117,16 @@ func (p *Provider) AuthCodeURL(state, redirectURI string) string {
 	q.Set("app_id", p.appID) // required by Feishu/Lark to identify the app
 	q.Set("redirect_uri", redirectURI)
 	q.Set("state", state)
-	// Read-only scopes sufficient to list + export drive documents and wiki nodes.
-	// drive:drive:readonly covers listing, export tasks and downloads. (Deleting
-	// cloud originals additionally needs the writable drive:drive scope granted in
-	// the app console; docs:document:readonly is NOT a valid Lark scope — error 20043.)
-	q.Set("scope", "drive:drive:readonly wiki:wiki:readonly")
+	// Read-only scopes for listing + exporting drive documents and wiki nodes:
+	//   - drive:drive:readonly  — list folders/files and download binary files
+	//   - wiki:wiki:readonly    — enumerate wiki spaces/nodes
+	//   - drive:export:readonly — create export tasks for native docs (docx/sheet/
+	//     bitable). WITHOUT it the export task returns 99991679 Unauthorized and
+	//     every native doc fails to archive (only raw "file" types download directly).
+	// (Deleting cloud originals additionally needs the writable drive:drive scope
+	// granted in the app console; docs:document:readonly is NOT a valid Lark scope —
+	// error 20043 — so we use drive:export:readonly, the privilege Lark itself names.)
+	q.Set("scope", "drive:drive:readonly wiki:wiki:readonly drive:export:readonly")
 	return fmt.Sprintf("%s/open-apis/authen/v1/authorize?%s", p.baseURL, q.Encode())
 }
 
