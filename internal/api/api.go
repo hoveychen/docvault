@@ -40,6 +40,8 @@ func NewRouter(a *app.App) http.Handler {
 	mux.Handle("GET /api/documents", h.requireUser(h.listDocuments))
 	mux.Handle("GET /api/documents/{id}/download", h.requireUser(h.downloadDocument))
 	mux.Handle("POST /api/documents/delete-source", h.requireUser(h.deleteSource))
+	mux.Handle("GET /api/folders", h.requireUser(h.listFolders))
+	mux.Handle("POST /api/folders/delete-source", h.requireUser(h.deleteFolderSource))
 	mux.Handle("POST /api/sync", h.requireUser(h.startSync))
 	mux.Handle("GET /api/sync/status", h.requireUser(h.syncStatus))
 
@@ -293,6 +295,108 @@ func (h *Handler) downloadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, url, http.StatusFound)
+}
+
+func (h *Handler) listFolders(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := userIDFrom(r)
+	folders, err := h.app.Repo.ListFolders(ctx, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list failed")
+		return
+	}
+	if folders == nil {
+		folders = []models.Folder{}
+	}
+	ownerIDs := map[string]string{} // provider -> this user's external id
+	for i := range folders {
+		f := &folders[i]
+		extID, ok := ownerIDs[f.Provider]
+		if !ok {
+			if acct, aerr := h.app.Repo.GetAccountForUser(ctx, userID, f.Provider); aerr == nil {
+				extID = acct.ExternalUserID
+			}
+			ownerIDs[f.Provider] = extID
+		}
+		f.Deletable, f.NotDeletable = h.app.Repo.FolderDeletability(ctx, userID, f, extID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"folders": folders})
+}
+
+// deleteFolderSource deletes whole source folders (cascading to trash) when every
+// document under them is archived and owned by the user.
+func (h *Handler) deleteFolderSource(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := userIDFrom(r)
+
+	var body struct {
+		FolderIDs []string `json:"folder_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.FolderIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "folder_ids required")
+		return
+	}
+
+	folders, err := h.app.Repo.GetFoldersByIDs(ctx, userID, body.FolderIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "lookup failed")
+		return
+	}
+
+	type provCtx struct {
+		extID string
+		tok   *provider.Token
+		prov  provider.Provider
+	}
+	cache := map[string]*provCtx{}
+	results := make([]map[string]string, 0, len(folders))
+
+	for i := range folders {
+		f := &folders[i]
+		res := map[string]string{"id": f.ID}
+
+		pc := cache[f.Provider]
+		if pc == nil {
+			pc = &provCtx{prov: h.app.Registry.Get(f.Provider)}
+			if acct, aerr := h.app.Repo.GetAccountForUser(ctx, userID, f.Provider); aerr == nil {
+				pc.extID = acct.ExternalUserID
+				if pc.prov != nil {
+					if tok, terr := h.app.Tokens.ValidToken(ctx, acct); terr == nil {
+						pc.tok = tok
+					}
+				}
+			}
+			cache[f.Provider] = pc
+		}
+		if pc.prov == nil || pc.tok == nil {
+			res["status"], res["error"] = "error", "provider unavailable"
+			results = append(results, res)
+			continue
+		}
+
+		if ok, reason := h.app.Repo.FolderDeletability(ctx, userID, f, pc.extID); !ok {
+			res["status"], res["error"] = "forbidden", reason
+			results = append(results, res)
+			continue
+		}
+
+		item := provider.Item{ExternalID: f.ExternalID, Title: f.Title, DocType: "folder", IsFolder: true}
+		if derr := pc.prov.Delete(ctx, pc.tok, item); derr != nil {
+			h.app.Log.Error("delete folder source failed", "folder_id", f.ID, "err", derr)
+			res["status"], res["error"] = "error", "delete failed"
+			results = append(results, res)
+			continue
+		}
+		if err := h.app.Repo.MarkFolderTreeSourceDeleted(ctx, userID, f); err != nil {
+			res["status"], res["error"] = "error", "deleted in cloud but failed to record"
+			results = append(results, res)
+			continue
+		}
+		res["status"] = "deleted"
+		results = append(results, res)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 func (h *Handler) startSync(w http.ResponseWriter, r *http.Request) {

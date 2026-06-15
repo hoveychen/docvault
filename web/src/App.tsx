@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type DocItem, type SyncStatus, type User } from "./api";
+import { api, type DocItem, type FolderItem, type SyncStatus, type User } from "./api";
 
 const PROVIDER_LABELS: Record<string, string> = {
   feishu: "飞书 / Lark",
@@ -55,12 +55,17 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [err, setErr] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [folders, setFolders] = useState<FolderItem[]>([]);
+  const [selectedFolders, setSelectedFolders] = useState<Set<string>>(new Set());
+  const [deletingFolders, setDeletingFolders] = useState(false);
 
   const refresh = useCallback(async () => {
-    const [d, s] = await Promise.all([api.documents(), api.syncStatus()]);
+    const [d, f, s] = await Promise.all([api.documents(), api.folders(), api.syncStatus()]);
     setDocs(d.documents || []);
+    setFolders(f.folders || []);
     setStatus(s);
     setSelected(new Set());
+    setSelectedFolders(new Set());
   }, []);
 
   useEffect(() => {
@@ -128,6 +133,37 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
     }
   };
 
+  const toggleFolder = (id: string) =>
+    setSelectedFolders((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const deleteSelectedFolders = async () => {
+    const ids = [...selectedFolders];
+    if (ids.length === 0) return;
+    const ok = window.confirm(
+      `确定要删除这 ${ids.length} 个文件夹的云端原件吗？\n\n` +
+        `整个文件夹及其内容会被移入飞书/Lark 回收站（可恢复）。仅当其内容已全部归档且归你本人拥有时才会执行。`
+    );
+    if (!ok) return;
+    setDeletingFolders(true);
+    setErr("");
+    try {
+      const { results } = await api.deleteFolderSource(ids);
+      const failed = results.filter((r) => r.status !== "deleted");
+      if (failed.length > 0) {
+        setErr(`部分文件夹未删除：${failed.map((f) => `${f.id.slice(0, 8)}(${f.error || f.status})`).join("，")}`);
+      }
+      await refresh();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setDeletingFolders(false);
+    }
+  };
+
   const running = status?.status === "queued" || status?.status === "running";
 
   return (
@@ -159,6 +195,61 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
           {status && <StatusLine status={status} />}
           {err && <p className="error">{err}</p>}
         </section>
+
+        {folders.length > 0 && (
+          <section className="card">
+            <div className="row spread">
+              <h2>源文件夹（{folders.length}）</h2>
+              <button
+                className="btn danger"
+                onClick={deleteSelectedFolders}
+                disabled={deletingFolders || selectedFolders.size === 0}
+                title="删除所选文件夹在云端的原件（整夹移入回收站）"
+              >
+                {deletingFolders ? "删除中…" : `删除文件夹原件（${selectedFolders.size}）`}
+              </button>
+            </div>
+            <p className="muted small-note">
+              仅当文件夹内所有文档都已归档且归你本人拥有时才可删除；否则会标注不可删原因。
+            </p>
+            <table className="docs">
+              <thead>
+                <tr>
+                  <th className="chk"></th>
+                  <th>文件夹</th>
+                  <th>路径</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                {folders.map((f) => (
+                  <tr key={f.id}>
+                    <td className="chk">
+                      <input
+                        type="checkbox"
+                        checked={selectedFolders.has(f.id)}
+                        onChange={() => toggleFolder(f.id)}
+                        disabled={!f.deletable}
+                        title={f.deletable ? "" : f.not_deletable_reason || "无法删除"}
+                      />
+                    </td>
+                    <td>{f.title}</td>
+                    <td className="muted">{f.source_path || "/"}</td>
+                    <td>
+                      {f.source_deleted_at ? (
+                        <span className="tag deleted">原件已删</span>
+                      ) : f.deletable ? (
+                        <span className="muted">可删除</span>
+                      ) : (
+                        <span className="muted">{f.not_deletable_reason}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        )}
 
         <section className="card">
           <div className="row spread">
