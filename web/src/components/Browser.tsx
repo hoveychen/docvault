@@ -503,8 +503,12 @@ function DocRow({
 }) {
   const v = fileVisual(doc);
   const deleted = !!doc.source_deleted_at;
+  const archived = doc.object_key !== "";
   return (
-    <tr className={"file-row" + (selected ? " is-selected" : "")} onClick={onToggle}>
+    <tr
+      className={"file-row" + (selected ? " is-selected" : "") + (!archived ? " is-unarchived" : "")}
+      onClick={onToggle}
+    >
       <td className="col-chk" onClick={(e) => e.stopPropagation()}>
         <input
           className="check"
@@ -525,13 +529,21 @@ function DocRow({
         <Badge tone="neutral">{v.label}</Badge>
       </td>
       {showFolderCol && <td className="text-tertiary">{doc.source_path || "/"}</td>}
-      <td className="num">{formatSize(doc.size_bytes)}</td>
+      <td className="num">{archived ? formatSize(doc.size_bytes) : "—"}</td>
       <td className="num">
-        {deleted ? <Badge tone="danger">原件已删</Badge> : formatRelative(doc.synced_at)}
+        {deleted ? (
+          <Badge tone="danger">原件已删</Badge>
+        ) : archived ? (
+          formatRelative(doc.synced_at)
+        ) : (
+          <Tooltip label="该类型未导出副本（缺导出权限或类型不支持），暂不可下载">
+            <Badge tone="warning">未归档</Badge>
+          </Tooltip>
+        )}
       </td>
       <td className="col-actions" onClick={(e) => e.stopPropagation()}>
         <div className="row-actions">
-          {doc.object_key !== "" && (
+          {archived && (
             <Tooltip label="下载">
               <a href={api.downloadUrl(doc.id)} className="icon-btn icon-btn--sm">
                 <ArrowDownToLine />
@@ -595,7 +607,7 @@ function GridView({
         return (
           <div
             key={d.id}
-            className={"grid-card" + (selected ? " is-selected" : "")}
+            className={"grid-card" + (selected ? " is-selected" : "") + (d.object_key === "" ? " is-unarchived" : "")}
             onClick={() => onToggleDoc(d.id)}
           >
             {d.deletable && (
@@ -612,7 +624,11 @@ function GridView({
             </div>
             <div className="grid-card__name">{d.title}</div>
             <div className="grid-card__meta">
-              {d.source_deleted_at ? "原件已删" : `${v.label} · ${formatSize(d.size_bytes)}`}
+              {d.source_deleted_at
+                ? "原件已删"
+                : d.object_key === ""
+                  ? "未归档"
+                  : `${v.label} · ${formatSize(d.size_bytes)}`}
             </div>
           </div>
         );
