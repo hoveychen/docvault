@@ -5,12 +5,14 @@ import { api, type ArchiveStats } from "../api";
 import { usePageUser } from "../App";
 import { useTheme } from "../lib/theme";
 import { fileVisual } from "../lib/fileType";
+import { SUPPORTED_LANGS, setLang, type Lang } from "../lib/i18n";
 import { Avatar, Badge, Spinner } from "../components/ui";
 
 export function Settings() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const user = usePageUser();
   const { theme, set } = useTheme();
+  const currentLang = (i18n.resolvedLanguage || i18n.language) as Lang;
 
   return (
     <div className="browser">
@@ -50,6 +52,25 @@ export function Settings() {
             <div className="seg" style={{ height: 36 }}>
               <ThemeOption icon={Moon} label={t("settings.dark")} active={theme === "dark"} onClick={() => set("dark")} />
               <ThemeOption icon={Sun} label={t("settings.light")} active={theme === "light"} onClick={() => set("light")} />
+            </div>
+          </section>
+
+          <section className="panel-section">
+            <div className="panel-section__head">
+              <h3>{t("settings.language")}</h3>
+            </div>
+            <p className="panel-section__desc">{t("settings.languageDesc")}</p>
+            <div className="seg" style={{ height: 36 }}>
+              {SUPPORTED_LANGS.map((lng) => (
+                <button
+                  key={lng}
+                  className={currentLang === lng ? "is-active" : ""}
+                  onClick={() => setLang(lng)}
+                  style={{ width: "auto", padding: "0 14px", fontSize: 13 }}
+                >
+                  {t(`language.${lng}`)}
+                </button>
+              ))}
             </div>
           </section>
         </div>

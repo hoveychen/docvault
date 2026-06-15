@@ -35,4 +35,18 @@ i18n
     },
   });
 
+// Keep <html lang> in sync so the browser and assistive tech know the language.
+function syncHtmlLang(lng: string) {
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = lng;
+  }
+}
+syncHtmlLang(i18n.language);
+i18n.on("languageChanged", syncHtmlLang);
+
+// Persisting is handled by the language detector's localStorage cache.
+export function setLang(lang: Lang) {
+  i18n.changeLanguage(lang);
+}
+
 export default i18n;

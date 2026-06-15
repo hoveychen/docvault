@@ -7,6 +7,7 @@ import {
   Cloud,
   Files,
   Folder,
+  Languages,
   LogOut,
   Moon,
   Settings,
@@ -18,6 +19,7 @@ import {
 import type { User } from "../api";
 import { useVault } from "../lib/vault";
 import { useTheme } from "../lib/theme";
+import { SUPPORTED_LANGS, setLang, type Lang } from "../lib/i18n";
 import { browseUrl, pathFromSplat } from "../lib/routes";
 import { Avatar } from "./ui";
 
@@ -145,10 +147,17 @@ function TreeNode({ path, name, depth }: { path: string; name: string; depth: nu
 }
 
 function UserFooter({ user, onLogout }: { user: User; onLogout: () => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [open, setOpen] = useState(false);
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
+
+  // Cycle through the supported languages in order; the menu shows the current one.
+  const currentLang = (i18n.resolvedLanguage || i18n.language) as Lang;
+  const cycleLang = () => {
+    const i = SUPPORTED_LANGS.indexOf(currentLang);
+    setLang(SUPPORTED_LANGS[(i + 1) % SUPPORTED_LANGS.length]);
+  };
 
   return (
     <div className="sidebar__footer">
@@ -173,6 +182,11 @@ function UserFooter({ user, onLogout }: { user: User; onLogout: () => void }) {
               {theme === "dark" ? <Sun /> : <Moon />}
               {theme === "dark" ? t("menu.lightTheme") : t("menu.darkTheme")}
               <span className="menu__switch">{theme === "dark" ? "Dark" : "Light"}</span>
+            </button>
+            <button className="menu__item" onClick={cycleLang}>
+              <Languages />
+              {t("settings.language")}
+              <span className="menu__switch">{t(`language.${currentLang}`)}</span>
             </button>
             <div className="menu__sep" />
             <button className="menu__item" onClick={() => { setOpen(false); onLogout(); }}>
