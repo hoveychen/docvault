@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   ChevronRight,
@@ -21,6 +22,7 @@ import { browseUrl, pathFromSplat } from "../lib/routes";
 import { Avatar } from "./ui";
 
 export function Sidebar({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const { t } = useTranslation();
   const { docs, tree } = useVault();
   const roots = tree.childFolders("");
 
@@ -37,13 +39,13 @@ export function Sidebar({ user, onLogout }: { user: User; onLogout: () => void }
       </div>
 
       <nav className="sidebar__scroll">
-        <NavItem to="/browse" icon={Files} label="全部文件" count={docs.length} end={false} />
-        <NavItem to="/recent" icon={Clock} label="最近同步" />
-        <NavItem to="/trash" icon={Trash2} label="回收站" />
+        <NavItem to="/browse" icon={Files} label={t("nav.allFiles")} count={docs.length} end={false} />
+        <NavItem to="/recent" icon={Clock} label={t("nav.recent")} />
+        <NavItem to="/trash" icon={Trash2} label={t("nav.trash")} />
 
         {sources.length > 0 && (
           <div className="nav-group">
-            <div className="nav-group__label">来源</div>
+            <div className="nav-group__label">{t("nav.sources")}</div>
             {sources.map((s) => (
               <NavLink
                 key={s}
@@ -59,7 +61,7 @@ export function Sidebar({ user, onLogout }: { user: User; onLogout: () => void }
 
         {roots.length > 0 && (
           <div className="nav-group">
-            <div className="nav-group__label">文件夹</div>
+            <div className="nav-group__label">{t("nav.folders")}</div>
             {roots.map((f) => (
               <TreeNode key={f.path} path={f.path} name={f.name} depth={0} />
             ))}
@@ -143,6 +145,7 @@ function TreeNode({ path, name, depth }: { path: string; name: string; depth: nu
 }
 
 function UserFooter({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const { theme, toggle } = useTheme();
   const navigate = useNavigate();
@@ -158,23 +161,23 @@ function UserFooter({ user, onLogout }: { user: User; onLogout: () => void }) {
           <div className="menu" role="menu">
             <button className="menu__item" onClick={() => { setOpen(false); navigate("/settings"); }}>
               <Settings />
-              设置
+              {t("menu.settings")}
             </button>
             {user.role === "admin" && (
               <button className="menu__item" onClick={() => { setOpen(false); navigate("/admin"); }}>
                 <Shield />
-                管理后台
+                {t("menu.admin")}
               </button>
             )}
             <button className="menu__item" onClick={toggle}>
               {theme === "dark" ? <Sun /> : <Moon />}
-              {theme === "dark" ? "浅色主题" : "深色主题"}
+              {theme === "dark" ? t("menu.lightTheme") : t("menu.darkTheme")}
               <span className="menu__switch">{theme === "dark" ? "Dark" : "Light"}</span>
             </button>
             <div className="menu__sep" />
             <button className="menu__item" onClick={() => { setOpen(false); onLogout(); }}>
               <LogOut />
-              退出登录
+              {t("menu.logout")}
             </button>
           </div>
         </>
@@ -182,7 +185,7 @@ function UserFooter({ user, onLogout }: { user: User; onLogout: () => void }) {
       <div className="user-chip" onClick={() => setOpen((v) => !v)}>
         <Avatar src={user.avatar_url} name={user.display_name || user.email} size={28} />
         <div className="user-chip__meta">
-          <div className="user-chip__name">{user.display_name || "我"}</div>
+          <div className="user-chip__name">{user.display_name || t("user.me")}</div>
           <div className="user-chip__sub">{user.email || user.role}</div>
         </div>
       </div>

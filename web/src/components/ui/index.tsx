@@ -4,6 +4,7 @@ import type {
   ReactNode,
 } from "react";
 import type { LucideIcon } from "lucide-react";
+import i18n from "../../lib/i18n";
 import "./ui.css";
 
 function cx(...parts: (string | false | undefined)[]): string {
@@ -131,7 +132,13 @@ export function Avatar({
 
 /* ---------- Spinner ---------- */
 export function Spinner({ size = 16 }: { size?: number }) {
-  return <span className="spinner" style={{ width: size, height: size }} aria-label="加载中" />;
+  return (
+    <span
+      className="spinner"
+      style={{ width: size, height: size }}
+      aria-label={i18n.t("common.loading")}
+    />
+  );
 }
 
 /* ---------- Skeleton ---------- */

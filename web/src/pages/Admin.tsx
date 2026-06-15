@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Navigate } from "react-router-dom";
 import { Plus, Shield } from "lucide-react";
 import { api, type Connection, type ConnectionInput, type User } from "../api";
 import { usePageUser } from "../App";
+import i18n from "../lib/i18n";
 import { Avatar, Badge, Button, Field, Input } from "../components/ui";
 
 export function Admin() {
+  const { t } = useTranslation();
   const me = usePageUser();
   if (me.role !== "admin") return <Navigate to="/browse" replace />;
 
@@ -14,7 +17,7 @@ export function Admin() {
       <div className="page-header">
         <span className="page-header__title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Shield size={16} />
-          管理后台
+          {t("admin.title")}
         </span>
       </div>
       <div className="page-body">
@@ -28,6 +31,7 @@ export function Admin() {
 }
 
 function Members({ meId }: { meId: string }) {
+  const { t } = useTranslation();
   const [users, setUsers] = useState<User[]>([]);
   const [err, setErr] = useState("");
 
@@ -49,7 +53,7 @@ function Members({ meId }: { meId: string }) {
   return (
     <section className="panel-section">
       <div className="panel-section__head">
-        <h3>成员（{users.length}）</h3>
+        <h3>{t("admin.membersTitle", { count: users.length })}</h3>
       </div>
       {err && <p className="error-text" style={{ fontSize: 13, marginBottom: 10 }}>{err}</p>}
       <div className="data-card">
@@ -59,25 +63,25 @@ function Members({ meId }: { meId: string }) {
             <div className="data-row__main">
               <div className="data-row__title">
                 {u.display_name || "—"}
-                {u.id === meId && <span className="text-tertiary"> （你）</span>}
+                {u.id === meId && <span className="text-tertiary">{t("admin.you")}</span>}
               </div>
               <div className="data-row__sub">{u.email || "—"}</div>
             </div>
             <Badge tone={u.role === "admin" ? "accent" : "neutral"}>
-              {u.role === "admin" ? "管理员" : "成员"}
+              {u.role === "admin" ? t("role.admin") : t("role.member")}
             </Badge>
-            {u.banned && <Badge tone="danger">已封禁</Badge>}
+            {u.banned && <Badge tone="danger">{t("admin.banned")}</Badge>}
             {u.id !== meId && (
               <div className="data-row__actions">
                 {u.role === "admin" ? (
-                  <Button size="sm" onClick={() => act(u.id, "demote")}>降为成员</Button>
+                  <Button size="sm" onClick={() => act(u.id, "demote")}>{t("admin.demote")}</Button>
                 ) : (
-                  <Button size="sm" onClick={() => act(u.id, "promote")}>设为管理员</Button>
+                  <Button size="sm" onClick={() => act(u.id, "promote")}>{t("admin.promote")}</Button>
                 )}
                 {u.banned ? (
-                  <Button size="sm" onClick={() => act(u.id, "unban")}>解封</Button>
+                  <Button size="sm" onClick={() => act(u.id, "unban")}>{t("admin.unban")}</Button>
                 ) : (
-                  <Button size="sm" variant="danger" onClick={() => act(u.id, "ban")}>封禁</Button>
+                  <Button size="sm" variant="danger" onClick={() => act(u.id, "ban")}>{t("admin.ban")}</Button>
                 )}
               </div>
             )}
@@ -90,16 +94,15 @@ function Members({ meId }: { meId: string }) {
 
 const EMPTY: ConnectionInput = { provider_type: "feishu", key: "", label: "", app_id: "", app_secret: "", domain: "feishu" };
 
-// Human-readable names for the provider implementation types the backend exposes.
-const TYPE_LABELS: Record<string, string> = {
-  feishu: "飞书 / Lark",
-  google: "Google Workspace",
-  microsoft: "Office 365",
-  tencent: "腾讯文档",
-};
-const typeLabel = (t: string) => TYPE_LABELS[t] || t;
+// Human-readable names for the provider implementation types the backend exposes;
+// falls back to the raw type when no translation exists.
+const typeLabel = (type: string) =>
+  i18n.exists(`admin.providerLabels.${type}`)
+    ? i18n.t(`admin.providerLabels.${type}`)
+    : type;
 
 function Connections() {
+  const { t } = useTranslation();
   const [conns, setConns] = useState<Connection[]>([]);
   const [types, setTypes] = useState<string[]>(["feishu"]);
   const [editing, setEditing] = useState<string | null>(null); // connection id, "new", or null
@@ -136,7 +139,7 @@ function Connections() {
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm("删除该连接？已用它登录的用户将无法再同步（已归档数据保留）。")) return;
+    if (!window.confirm(t("admin.confirmDeleteConnection"))) return;
     setErr("");
     try {
       await api.adminDeleteConnection(id);
@@ -149,19 +152,16 @@ function Connections() {
   return (
     <section className="panel-section">
       <div className="panel-section__head">
-        <h3>连接 / 组织（{conns.length}）</h3>
+        <h3>{t("admin.connectionsTitle", { count: conns.length })}</h3>
         <Button size="sm" variant="primary" icon={Plus} onClick={startNew}>
-          新增连接
+          {t("admin.addConnection")}
         </Button>
       </div>
-      <p className="panel-section__desc">
-        每个连接对应一个云文档厂商的自建应用（飞书 / Google Workspace / Office 365 / 腾讯文档）。
-        记得在该厂商的应用后台注册重定向 URL &lt;PUBLIC_URL&gt;/api/auth/&lt;key&gt;/callback。
-      </p>
+      <p className="panel-section__desc">{t("admin.connectionsDesc")}</p>
       {err && <p className="error-text" style={{ fontSize: 13, marginBottom: 10 }}>{err}</p>}
       <div className="data-card">
         {conns.length === 0 && (
-          <div className="data-row text-tertiary" style={{ fontSize: 13 }}>暂无连接。</div>
+          <div className="data-row text-tertiary" style={{ fontSize: 13 }}>{t("admin.noConnections")}</div>
         )}
         {conns.map((c) => (
           <div className="data-row" key={c.id}>
@@ -175,13 +175,13 @@ function Connections() {
               <div className="data-row__sub mono">
                 {typeLabel(c.provider_type)} · {c.app_id}
                 {c.provider_type === "feishu" ? ` · ${c.domain}` : ""} ·{" "}
-                {c.has_secret ? "密钥已设置" : "密钥缺失"}
+                {c.has_secret ? t("admin.secretSet") : t("admin.secretMissing")}
               </div>
             </div>
-            {!c.has_secret && <Badge tone="danger">密钥缺失</Badge>}
+            {!c.has_secret && <Badge tone="danger">{t("admin.secretMissing")}</Badge>}
             <div className="data-row__actions">
-              <Button size="sm" onClick={() => startEdit(c)}>编辑</Button>
-              <Button size="sm" variant="danger" onClick={() => remove(c.id)}>删除</Button>
+              <Button size="sm" onClick={() => startEdit(c)}>{t("common.edit")}</Button>
+              <Button size="sm" variant="danger" onClick={() => remove(c.id)}>{t("common.delete")}</Button>
             </div>
           </div>
         ))}
@@ -189,27 +189,27 @@ function Connections() {
 
       {editing && (
         <div className="form-card">
-          <h4>{editing === "new" ? "新增连接" : "编辑连接"}</h4>
+          <h4>{editing === "new" ? t("admin.addConnection") : t("admin.editConnection")}</h4>
           {editing === "new" && (
-            <Field label="厂商类型">
+            <Field label={t("admin.providerType")}>
               <select
                 className="input-wrap"
                 style={{ height: 32 }}
                 value={form.provider_type}
                 onChange={(e) => {
-                  const t = e.target.value;
+                  const pt = e.target.value;
                   // domain only applies to feishu; reset it when switching type.
-                  setForm({ ...form, provider_type: t, domain: t === "feishu" ? "feishu" : "" });
+                  setForm({ ...form, provider_type: pt, domain: pt === "feishu" ? "feishu" : "" });
                 }}
               >
-                {types.map((t) => (
-                  <option key={t} value={t}>{typeLabel(t)}</option>
+                {types.map((pt) => (
+                  <option key={pt} value={pt}>{typeLabel(pt)}</option>
                 ))}
               </select>
             </Field>
           )}
           {editing === "new" && (
-            <Field label="Key（唯一，用于 OAuth 路由 /api/auth/<key>/callback）">
+            <Field label={t("admin.fieldKey")}>
               <Input
                 block
                 value={form.key}
@@ -218,7 +218,7 @@ function Connections() {
               />
             </Field>
           )}
-          <Field label="显示名称">
+          <Field label={t("admin.fieldLabel")}>
             <Input
               block
               value={form.label}
@@ -234,7 +234,7 @@ function Connections() {
               placeholder="cli_xxx"
             />
           </Field>
-          <Field label={`App Secret${editing !== "new" ? "（留空则保持不变）" : ""}`}>
+          <Field label={editing !== "new" ? t("admin.fieldSecretEdit") : t("admin.fieldSecret")}>
             <Input
               block
               type="password"
@@ -243,20 +243,20 @@ function Connections() {
             />
           </Field>
           {form.provider_type === "feishu" && (
-            <Field label="域">
+            <Field label={t("admin.fieldDomain")}>
               <select
                 className="input-wrap"
                 style={{ height: 32 }}
                 value={form.domain}
                 onChange={(e) => setForm({ ...form, domain: e.target.value })}
               >
-                <option value="feishu">飞书 (open.feishu.cn)</option>
-                <option value="lark">Lark (open.larksuite.com)</option>
+                <option value="feishu">{t("admin.domainFeishu")}</option>
+                <option value="lark">{t("admin.domainLark")}</option>
               </select>
             </Field>
           )}
           {form.provider_type === "microsoft" && (
-            <Field label="Entra 租户（common / organizations / 租户 ID）">
+            <Field label={t("admin.fieldTenant")}>
               <Input
                 block
                 value={form.domain}
@@ -266,11 +266,11 @@ function Connections() {
             </Field>
           )}
           <div className="form-actions">
-            <Button variant="primary" size="sm" onClick={save}>保存</Button>
-            <Button variant="ghost" size="sm" onClick={() => setEditing(null)}>取消</Button>
+            <Button variant="primary" size="sm" onClick={save}>{t("common.save")}</Button>
+            <Button variant="ghost" size="sm" onClick={() => setEditing(null)}>{t("common.cancel")}</Button>
           </div>
           <p className="form-card__hint">
-            重定向 URL：&lt;PUBLIC_URL&gt;/api/auth/{form.key || "<key>"}/callback
+            {t("admin.redirectHint", { key: form.key || "<key>" })}
           </p>
         </div>
       )}

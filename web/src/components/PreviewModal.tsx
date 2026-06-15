@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { createPortal } from "react-dom";
 import { ArrowDownToLine, X } from "lucide-react";
 import { api, type DocItem } from "../api";
@@ -15,6 +16,7 @@ type Status = "loading" | "ready" | "error";
 type Sheet = { name: string; html: string };
 
 export function PreviewModal({ doc, onClose }: Props) {
+  const { t } = useTranslation();
   const kind = previewKind(doc);
   const v = fileVisual(doc);
 
@@ -77,7 +79,7 @@ export function PreviewModal({ doc, onClose }: Props) {
         if (!cancelled) setStatus("ready");
       } catch (e) {
         if (!cancelled) {
-          setErrMsg(e instanceof Error ? e.message : "加载失败");
+          setErrMsg(e instanceof Error ? e.message : t("preview.loadFailed"));
           setStatus("error");
         }
       }
@@ -104,7 +106,7 @@ export function PreviewModal({ doc, onClose }: Props) {
         await renderAsync(buf, host, undefined, { inWrapper: true });
       } catch (e) {
         if (!cancelled) {
-          setErrMsg(e instanceof Error ? e.message : "渲染失败");
+          setErrMsg(e instanceof Error ? e.message : t("preview.renderFailed"));
           setStatus("error");
         }
       }
@@ -133,12 +135,12 @@ export function PreviewModal({ doc, onClose }: Props) {
           <a
             href={api.downloadUrl(doc.id)}
             className="icon-btn icon-btn--sm"
-            aria-label="下载"
-            title="下载"
+            aria-label={t("common.download")}
+            title={t("common.download")}
           >
             <ArrowDownToLine />
           </a>
-          <IconButton icon={X} size="sm" onClick={onClose} label="关闭" />
+          <IconButton icon={X} size="sm" onClick={onClose} label={t("common.close")} />
         </header>
 
         <div className="preview-modal__body">
@@ -175,11 +177,12 @@ function Body(p: {
   docxHost: React.RefObject<HTMLDivElement>;
   downloadUrl: string;
 }) {
+  const { t } = useTranslation();
   if (p.kind === "unsupported") {
-    return <Fallback msg="该格式暂不支持在线预览" downloadUrl={p.downloadUrl} />;
+    return <Fallback msg={t("preview.unsupported")} downloadUrl={p.downloadUrl} />;
   }
   if (p.status === "error") {
-    return <Fallback msg={p.errMsg || "加载失败"} downloadUrl={p.downloadUrl} />;
+    return <Fallback msg={p.errMsg || t("preview.loadFailed")} downloadUrl={p.downloadUrl} />;
   }
   if (p.status === "loading" && p.kind !== "docx") {
     return (
@@ -234,17 +237,18 @@ function Body(p: {
         </>
       );
     default:
-      return <Fallback msg="该格式暂不支持在线预览" downloadUrl={p.downloadUrl} />;
+      return <Fallback msg={t("preview.unsupported")} downloadUrl={p.downloadUrl} />;
   }
 }
 
 function Fallback({ msg, downloadUrl }: { msg: string; downloadUrl: string }) {
+  const { t } = useTranslation();
   return (
     <div className="preview-center preview-fallback">
       <p>{msg}</p>
       <a href={downloadUrl} className="btn btn--primary btn--sm">
         <ArrowDownToLine />
-        下载文件
+        {t("preview.downloadFile")}
       </a>
     </div>
   );
