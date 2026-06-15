@@ -1,0 +1,30 @@
+# Build output
+/bin/
+/dist/
+*.exe
+
+# Env / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Object storage / data volumes (local dev)
+/.data/
+/minio-data/
+/pg-data/
+
+# Frontend
+/web/node_modules/
+/web/dist/
+/web/.vite/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Agent scratch
+TASKS.md
+/.worktrees/
