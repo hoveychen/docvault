@@ -1,10 +1,10 @@
 # docvault architecture
 
 docvault is a multi-source cloud-document archival SaaS. A user signs in by OAuth-authorizing
-a cloud-document provider (first provider: Feishu/Lark; Google Workspace and Office 365 are
-planned). A background worker walks everything that user's token can reach, exports each online
-document to a portable format (docx / xlsx / pdf / markdown), stores it in object storage, and
-the web UI lets the user browse and download their archive.
+a cloud-document provider — today Feishu/Lark, Google Workspace, Office 365 / Microsoft 365, and
+腾讯文档 (Tencent Docs). A background worker walks everything that user's token can reach, exports
+each online document to a portable format (docx / xlsx / pptx / pdf), stores it in object storage,
+and the web UI lets the user browse and download their archive.
 
 ## Why per-user OAuth (and not a tenant-wide token)
 
@@ -13,7 +13,8 @@ documents. A `tenant_access_token` only sees what the app itself owns or was gra
 `user_access_token` only sees what that one authorizing user can access. So "back up the whole
 org" is fundamentally **per-user**: every member must personally authorize once. docvault models
 this directly — each signed-in user authorizes their own account, and the archive is scoped to
-that user. Google Workspace / Office 365 will slot in behind the same per-account model.
+that user. The other providers (Google Workspace, Microsoft 365, Tencent Docs) sit behind the same
+per-account model — every one is a user-scoped OAuth token, not a tenant-admin token.
 
 ## Components
 
@@ -25,10 +26,11 @@ that user. Google Workspace / Office 365 will slot in behind the same per-accoun
                 └─────┬───────┘         └──────────────────────────────┘
                       │ enqueue sync_job             ▲
                       ▼                              │ claim / update
-                ┌─────────────┐   provider API  ┌────┴─────────┐   PUT   ┌─────────┐
-                │  worker     │ ───────────────►│ Feishu / Lark │        │  MinIO  │
-                │ (cmd/worker)│ ◄───────────────│  (oapi-sdk-go)│ ──────►│  (S3)   │
-                └─────────────┘   export+download└──────────────┘        └─────────┘
+                ┌─────────────┐   provider API  ┌──────────────────┐  PUT  ┌─────────┐
+                │  worker     │ ───────────────►│ provider.Provider │      │  MinIO  │
+                │ (cmd/worker)│ ◄───────────────│ feishu/google/    │ ────►│  (S3)   │
+                └─────────────┘   export+download│ microsoft/tencent │      └─────────┘
+                                                 └──────────────────┘
 ```
 
 - **server** (`cmd/server`) — HTTP API: OAuth login/callback, list documents, trigger sync,
@@ -46,19 +48,43 @@ that user. Google Workspace / Office 365 will slot in behind the same per-accoun
 
 ```go
 type Provider interface {
-    Key() string                                           // "feishu", later "google", "o365"
-    AuthCodeURL(state, redirectURI string) string          // step 1 of OAuth
-    Exchange(ctx, code, redirectURI) (*Token, error)       // code -> tokens
+    Key() string                                              // routing/storage id (the connection key)
+    Label() string                                            // shown on the login page
+    AuthCodeURL(state, redirectURI string) string             // step 1 of OAuth
+    Exchange(ctx, code, redirectURI) (*Token, *Identity, error) // code -> tokens + who authorized
     Refresh(ctx, refreshToken string) (*Token, error)
-    Identity(ctx, tok *Token) (*Identity, error)           // who authorized
-    List(ctx, tok *Token) ([]Item, error)                  // everything reachable
-    Export(ctx, tok *Token, item Item) (*Blob, error)      // bytes + filename + mime
+    List(ctx, tok *Token) ([]Item, error)                     // everything reachable
+    Export(ctx, tok *Token, item Item) (*Blob, error)         // bytes + filename + mime
+    Delete(ctx, tok *Token, item Item) error                  // move cloud original to trash
 }
 ```
 
-`internal/provider/feishu` implements it with `github.com/larksuite/oapi-sdk-go/v3`. Adding
-Google Workspace later means a new package implementing the same interface plus a row in the
-provider registry — nothing else changes.
+### Connection types and the factory registry
+
+A **connection** (the `provider_connections` table, admin-managed) carries a `provider_type`
+discriminator alongside the OAuth client credential (`app_id` / `app_secret`) and a type-specific
+`domain` (Feishu/Lark variant, or the Entra tenant for Microsoft). `Key()` is the per-connection
+routing id stored on every account/document/folder; `provider_type` selects the implementation.
+
+Each implementation package registers a factory from its `init()`:
+
+```go
+func init() {
+    provider.RegisterFactory("google", func(def provider.ConnDef) (provider.Provider, error) { … })
+}
+```
+
+`internal/app` blank-imports every implementation so those `init()`s run, then
+`provider.Build(ConnDef{Type: …})` constructs the right provider per connection and
+`ReloadProviders` hot-swaps the registry whenever an admin edits a connection. **Adding a new
+source is one new package** (implement `Provider` + `RegisterFactory` in `init()`) plus a one-line
+blank import — no central switch to edit.
+
+Implementations: `feishu` (via `larksuite/oapi-sdk-go/v3`), `google` (via
+`google.golang.org/api/drive/v3` — Docs/Sheets/Slides exported to docx/xlsx/pptx, binaries
+downloaded raw), `microsoft` (Microsoft Graph REST — OneDrive items download as native OOXML, no
+conversion), and `tencent` (docs.qq.com/open REST — async export task → poll → download). All four
+share `golang.org/x/time/rate` limiting and a `call()` retry helper.
 
 ## Sync lifecycle
 
@@ -74,5 +100,6 @@ provider registry — nothing else changes.
 - Provider OAuth tokens are encrypted at rest with AES-256-GCM (`internal/crypto`), key from
   `DOCVAULT_TOKEN_ENC_KEY`.
 - Sessions are JWT in an HttpOnly cookie signed with `DOCVAULT_JWT_SECRET`.
-- Download URLs are short-lived S3 pre-signed URLs; bytes never proxy through the app.
+- Downloads stream through the server from object storage (so single-origin deployments work
+  without exposing the object store to the browser); access is gated by the session's `user_id`.
 - All document/job queries are scoped by `user_id` from the session — no cross-user access.

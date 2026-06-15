@@ -5,8 +5,11 @@ cloud-document provider, a background worker walks everything that user's token 
 exports each document to a portable format (docx / xlsx / …), stores it in object storage, and
 the web UI lets them browse and download their archive.
 
-First provider: **Feishu / Lark**. Google Workspace and Office 365 slot in behind the same
-[`provider.Provider`](internal/provider/provider.go) interface.
+Providers implemented today: **Feishu / Lark**, **Google Workspace**, **Office 365 / Microsoft 365**,
+and **腾讯文档 (Tencent Docs)** — all behind the same
+[`provider.Provider`](internal/provider/provider.go) interface. Each connection picks its
+implementation by `provider_type`; adding another source is a new package that self-registers a
+factory (see [Provider abstraction](docs/architecture.md#provider-abstraction)).
 
 > **Why per-user, not "whole org in one click"?** Feishu's OpenAPI has no admin/tenant token
 > that can read every member's private documents — a `tenant_access_token` only sees what the app
@@ -16,7 +19,8 @@ First provider: **Feishu / Lark**. Google Workspace and Office 365 slot in behin
 
 ## Stack
 
-- **Backend** — Go, [`larksuite/oapi-sdk-go`](https://github.com/larksuite/oapi-sdk-go) for Feishu
+- **Backend** — Go. Feishu via [`larksuite/oapi-sdk-go`](https://github.com/larksuite/oapi-sdk-go);
+  Google via `google.golang.org/api/drive/v3`; Microsoft Graph and Tencent Docs via raw REST + `golang.org/x/oauth2`
 - **Metadata + job queue** — Postgres (the queue is `SELECT … FOR UPDATE SKIP LOCKED`, no Redis)
 - **Object storage** — S3-compatible (MinIO in dev)
 - **Frontend** — React + Vite + TypeScript
@@ -100,19 +104,49 @@ needed. Just register the exact `http://localhost:8080/...` callback and set
 `DOCVAULT_PUBLIC_URL=http://localhost:8080`. For local testing use the single-origin mode
 (`pnpm build` + server on `:8080`); don't run OAuth through the Vite `:5173` dev port.
 
+## Other providers (Google Workspace / Office 365 / 腾讯文档)
+
+Every provider is one connection with a `provider_type`. You add connections either from the
+**admin UI** (recommended) or by seeding `DOCVAULT_PROVIDER_CONNECTIONS` (a JSON array, one object
+per connection) on first boot. The OAuth route is always `/api/auth/<key>/callback` — register
+that exact redirect URL in the provider's app console. Common fields: `key` (unique route/id),
+`label`, `app_id` (OAuth client id), `app_secret`, and the type-specific `domain`.
+
+| `provider_type` | App console | `app_id` / `app_secret` | `domain` | Notes |
+|---|---|---|---|---|
+| `feishu` | open.feishu.cn / open.larksuite.com | App ID / App Secret | `feishu` or `lark` | see above |
+| `google` | console.cloud.google.com (OAuth client) | Client ID / Client secret | *(unused)* | Drive API; full `drive` scope so trash-delete works; export has a ~10 MB cap; My Drive only |
+| `microsoft` | Entra ID app registration | Application (client) ID / secret | Entra **tenant** (`common` / `organizations` / tenant-id) | Microsoft Graph; OneDrive only (SharePoint not yet); files download as native OOXML |
+| `tencent` | docs.qq.com/open | Client ID / Client secret | *(unused)* | OAuth scope `all`; async export → docx/xlsx/pptx; delete moves to recycle bin |
+
+Example seed (merged with the Feishu vars; all `key`s must be globally unique):
+
+```json
+[{"provider_type":"google","key":"gws","label":"Acme (Google)","app_id":"xxx.apps.googleusercontent.com","app_secret":"yyy","domain":""},
+ {"provider_type":"microsoft","key":"o365","label":"Acme (Microsoft 365)","app_id":"<client-id>","app_secret":"zzz","domain":"common"}]
+```
+
+> **Not yet verified end-to-end.** No provider (including Feishu) has been run against the live API
+> with real credentials yet — the code compiles and is unit-tested, but live OAuth + sync needs
+> app credentials. The Tencent Docs REST surface was built against the official docs.qq.com/open
+> documentation; two runtime details (the exact OOXML container its export produces, and whether
+> folder-list items carry `ownerID`) are marked `// UNVERIFIED:` in the code pending a live run.
+
 ## Admin backend
 
 - **The first user to ever sign in becomes the initial admin.** Everyone after is a member.
 - Admins see an **管理后台 / Admin** panel in the web UI to:
   - **Manage members** — promote/demote between admin and member, ban/unban. Banned users are
     blocked from the whole app; the last remaining admin can't be demoted or banned.
-  - **Manage connections** — add/edit/delete Feishu/Lark orgs (key, label, App ID, App Secret,
-    domain) *from the UI*. Connections live in the DB (secret encrypted at rest); the provider
-    registry hot-reloads on every change, so no restart is needed.
-- `DOCVAULT_FEISHU_CONNECTIONS` (or the single-app vars) is only a **seed**: on first boot, when
-  the connections table is empty, env connections are imported into the DB. After that, the DB is
-  the source of truth and you manage orgs in the admin UI. Remember to register each connection's
-  redirect URL (`<PUBLIC_URL>/api/auth/<key>/callback`) in that org's app console.
+  - **Manage connections** — add/edit/delete connections of any provider type (pick the type, then
+    key, label, App ID, App Secret, and the type-specific domain/tenant) *from the UI*. The
+    `provider_type` is fixed at creation. Connections live in the DB (secret encrypted at rest);
+    the provider registry hot-reloads on every change, so no restart is needed.
+- `DOCVAULT_FEISHU_CONNECTIONS` / `DOCVAULT_PROVIDER_CONNECTIONS` (or the single-app Feishu vars)
+  are only a **seed**: on first boot, when the connections table is empty, env connections are
+  imported into the DB. After that, the DB is the source of truth and you manage connections in the
+  admin UI. Remember to register each connection's redirect URL
+  (`<PUBLIC_URL>/api/auth/<key>/callback`) in that provider's app console.
 
 ## Scheduled sync
 
@@ -145,7 +179,7 @@ internal/
   crypto        AES-256-GCM for tokens at rest
   db            pgx pool, embedded migrations, repositories
   store         S3/MinIO object storage
-  provider      Provider interface (+ feishu/ impl)
+  provider      Provider interface + factory registry (feishu/ google/ microsoft/ tencent/ impls)
   auth          JWT sessions + token refresh
   sync          archival engine + worker loop
   api           REST handlers
@@ -154,13 +188,16 @@ web/            React/Vite frontend
 
 ## Status
 
-Implemented: Feishu/Lark OAuth login (multi-org), recursive drive sync (`docx`/`doc`/`sheet`/
-`bitable`/`slides` export + binary files + Wiki spaces), object-storage archival, browse +
-pre-signed download, batch deletion of cloud originals (documents and whole folders, owner- and
-archival-gated, to trash), an admin backend (roles, ban, UI-managed connections), and a production
-Docker stack.
+Implemented: a multi-provider connection layer (`provider_type` + factory registry) with **four**
+providers — Feishu/Lark, Google Workspace, Office 365 / Microsoft Graph, and 腾讯文档 — each behind
+the same [`provider.Provider`](internal/provider/provider.go) interface; Feishu/Lark OAuth login
+(multi-org), recursive drive sync (export to `docx`/`xlsx`/`pptx`/`pdf` + binary files + Feishu Wiki
+spaces), object-storage archival, browse + streamed download, batch deletion of cloud originals
+(documents and whole folders, owner- and archival-gated, to trash), an admin backend (roles, ban,
+UI-managed connections of any type), and a production Docker stack.
 
-Known follow-ups: end-to-end run against the real Feishu/Lark API (needs app credentials),
-"shared with me" sync (no clean enumerate API), `mindnote`/board export, Wiki/folder-object
-deletion, and additional providers (Google Workspace / Office 365) behind the same
-[`provider.Provider`](internal/provider/provider.go) interface.
+Known follow-ups: **end-to-end run against any real provider API (needs app credentials)** — the
+code compiles and is unit-tested but no live OAuth+sync has been run yet; confirm the Tencent
+`// UNVERIFIED:` details (export container, list `ownerID`); Microsoft **SharePoint** sites and
+Google **Shared Drives / "shared with me"** enumeration; Feishu `mindnote`/board export and
+Wiki/folder-object deletion.
