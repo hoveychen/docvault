@@ -442,6 +442,18 @@ func (r *Repo) UpsertDocument(ctx context.Context, d *models.Document) error {
 	return err
 }
 
+// IsArchived reports whether a document already has a downloadable copy
+// (object_key non-empty). Drives incremental sync: archived items are skipped
+// rather than re-exported.
+func (r *Repo) IsArchived(ctx context.Context, userID, provider, externalID string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM documents
+		   WHERE user_id=$1 AND provider=$2 AND external_id=$3 AND object_key<>'')`,
+		userID, provider, externalID).Scan(&exists)
+	return exists, err
+}
+
 const docCols = `SELECT id, user_id, provider, external_id, title, doc_type, format,
 	source_path, object_key, size_bytes, owner_external_id, source_deleted_at, synced_at FROM documents`
 
