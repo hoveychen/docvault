@@ -17,9 +17,19 @@ import (
 	larkauthen "github.com/larksuite/oapi-sdk-go/v3/service/authen/v1"
 	larkdrive "github.com/larksuite/oapi-sdk-go/v3/service/drive/v1"
 	larkwiki "github.com/larksuite/oapi-sdk-go/v3/service/wiki/v2"
+	"golang.org/x/time/rate"
 
 	"github.com/hoveychen/docvault/internal/config"
 	"github.com/hoveychen/docvault/internal/provider"
+)
+
+// Lark "request trigger frequency limit" error code; we back off and retry on it.
+const codeFrequencyLimit = 99991400
+
+const (
+	apiRatePerSec = 8 // conservative steady-state request rate per app
+	apiBurst      = 8
+	maxAPIRetries = 6
 )
 
 // exportable maps a Feishu doc type to the export file extension we request via
@@ -49,6 +59,7 @@ type Provider struct {
 	appID   string
 	client  *lark.Client
 	baseURL string // open.feishu.cn or open.larksuite.com base
+	limiter *rate.Limiter
 }
 
 // New builds a provider for one org connection.
@@ -58,11 +69,47 @@ func New(conn config.FeishuConnection) *Provider {
 		baseURL = lark.LarkBaseUrl
 	}
 	client := lark.NewClient(conn.AppID, conn.AppSecret, lark.WithOpenBaseUrl(baseURL))
-	return &Provider{key: conn.Key, label: conn.Label, appID: conn.AppID, client: client, baseURL: baseURL}
+	return &Provider{
+		key: conn.Key, label: conn.Label, appID: conn.AppID, client: client, baseURL: baseURL,
+		limiter: rate.NewLimiter(apiRatePerSec, apiBurst),
+	}
 }
 
 func (p *Provider) Key() string   { return p.key }
 func (p *Provider) Label() string { return p.label }
+
+// call runs one rate-limited Feishu API call, retrying with exponential backoff
+// when Lark returns the frequency-limit code (99991400). The attempt closure
+// performs the SDK call and reports (success, code, msg, transport-error).
+func (p *Provider) call(ctx context.Context, label string, attempt func() (ok bool, code int, msg string, err error)) error {
+	for i := 0; ; i++ {
+		if err := p.limiter.Wait(ctx); err != nil {
+			return err
+		}
+		ok, code, msg, err := attempt()
+		if err != nil {
+			return fmt.Errorf("%s: %w", label, err)
+		}
+		if ok {
+			return nil
+		}
+		if code == codeFrequencyLimit && i < maxAPIRetries {
+			backoff := time.Duration(1<<uint(i)) * time.Second
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
+			}
+			slog.Default().Warn("feishu rate limited; backing off",
+				"label", label, "attempt", i+1, "backoff", backoff.String())
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			continue
+		}
+		return fmt.Errorf("%s: code=%d msg=%s", label, code, msg)
+	}
+}
 
 // AuthCodeURL builds the authorization redirect (Feishu authen v1, scope-aware).
 func (p *Provider) AuthCodeURL(state, redirectURI string) string {
@@ -153,12 +200,16 @@ func (p *Provider) walk(ctx context.Context, accessToken, folderToken, pathPrefi
 		if pageToken != "" {
 			b.PageToken(pageToken)
 		}
-		resp, err := p.client.Drive.File.List(ctx, b.Build(), larkcore.WithUserAccessToken(accessToken))
-		if err != nil {
-			return fmt.Errorf("list folder %q: %w", folderToken, err)
-		}
-		if !resp.Success() {
-			return fmt.Errorf("list folder %q: code=%d msg=%s", folderToken, resp.Code, resp.Msg)
+		var resp *larkdrive.ListFileResp
+		if err := p.call(ctx, fmt.Sprintf("list folder %q", folderToken), func() (bool, int, string, error) {
+			var e error
+			resp, e = p.client.Drive.File.List(ctx, b.Build(), larkcore.WithUserAccessToken(accessToken))
+			if e != nil {
+				return false, 0, "", e
+			}
+			return resp.Success(), resp.Code, resp.Msg, nil
+		}); err != nil {
+			return err
 		}
 
 		for _, f := range resp.Data.Files {
@@ -218,13 +269,16 @@ func (p *Provider) listWiki(ctx context.Context, accessToken string, out *[]prov
 		if pageToken != "" {
 			b.PageToken(pageToken)
 		}
-		resp, err := p.client.Wiki.Space.List(ctx, b.Build(), opt)
-		if err != nil {
+		var resp *larkwiki.ListSpaceResp
+		if err := p.call(ctx, "list wiki spaces", func() (bool, int, string, error) {
+			var e error
+			resp, e = p.client.Wiki.Space.List(ctx, b.Build(), opt)
+			if e != nil {
+				return false, 0, "", e
+			}
+			return resp.Success(), resp.Code, resp.Msg, nil
+		}); err != nil {
 			slog.Default().Warn("skip wiki: list spaces failed", "err", err)
-			return nil
-		}
-		if !resp.Success() {
-			slog.Default().Warn("skip wiki: list spaces failed", "code", resp.Code, "msg", resp.Msg)
 			return nil
 		}
 		for _, sp := range resp.Data.Items {
@@ -252,12 +306,16 @@ func (p *Provider) walkWikiNodes(ctx context.Context, opt larkcore.RequestOption
 		if pageToken != "" {
 			b.PageToken(pageToken)
 		}
-		resp, err := p.client.Wiki.SpaceNode.List(ctx, b.Build(), opt)
-		if err != nil {
-			return fmt.Errorf("list wiki nodes (space %s): %w", spaceID, err)
-		}
-		if !resp.Success() {
-			return fmt.Errorf("list wiki nodes (space %s): code=%d msg=%s", spaceID, resp.Code, resp.Msg)
+		var resp *larkwiki.ListSpaceNodeResp
+		if err := p.call(ctx, fmt.Sprintf("list wiki nodes (space %s)", spaceID), func() (bool, int, string, error) {
+			var e error
+			resp, e = p.client.Wiki.SpaceNode.List(ctx, b.Build(), opt)
+			if e != nil {
+				return false, 0, "", e
+			}
+			return resp.Success(), resp.Code, resp.Msg, nil
+		}); err != nil {
+			return err
 		}
 		for _, n := range resp.Data.Items {
 			title := strDeref(n.Title)
@@ -290,12 +348,16 @@ func (p *Provider) walkWikiNodes(ctx context.Context, opt larkcore.RequestOption
 func (p *Provider) downloadBinary(ctx context.Context, accessToken string, item provider.Item) (*provider.Blob, error) {
 	opt := larkcore.WithUserAccessToken(accessToken)
 	req := larkdrive.NewDownloadFileReqBuilder().FileToken(item.ExternalID).Build()
-	resp, err := p.client.Drive.File.Download(ctx, req, opt)
-	if err != nil {
-		return nil, fmt.Errorf("download file: %w", err)
-	}
-	if !resp.Success() {
-		return nil, fmt.Errorf("download file: code=%d msg=%s", resp.Code, resp.Msg)
+	var resp *larkdrive.DownloadFileResp
+	if err := p.call(ctx, "download file", func() (bool, int, string, error) {
+		var e error
+		resp, e = p.client.Drive.File.Download(ctx, req, opt)
+		if e != nil {
+			return false, 0, "", e
+		}
+		return resp.Success(), resp.Code, resp.Msg, nil
+	}); err != nil {
+		return nil, err
 	}
 	data, err := io.ReadAll(resp.File)
 	if err != nil {
@@ -335,12 +397,19 @@ func (p *Provider) Export(ctx context.Context, tok *provider.Token, item provide
 			Token:         &item.ExternalID,
 			FileExtension: &ext,
 		}).Build()
-	createResp, err := p.client.Drive.ExportTask.Create(ctx, createReq, opt)
-	if err != nil {
-		return nil, fmt.Errorf("create export task: %w", err)
+	var createResp *larkdrive.CreateExportTaskResp
+	if err := p.call(ctx, "create export task", func() (bool, int, string, error) {
+		var e error
+		createResp, e = p.client.Drive.ExportTask.Create(ctx, createReq, opt)
+		if e != nil {
+			return false, 0, "", e
+		}
+		return createResp.Success(), createResp.Code, createResp.Msg, nil
+	}); err != nil {
+		return nil, err
 	}
-	if !createResp.Success() || createResp.Data.Ticket == nil {
-		return nil, fmt.Errorf("create export task: code=%d msg=%s", createResp.Code, createResp.Msg)
+	if createResp.Data.Ticket == nil {
+		return nil, fmt.Errorf("create export task: no ticket returned")
 	}
 	ticket := *createResp.Data.Ticket
 
@@ -350,12 +419,16 @@ func (p *Provider) Export(ctx context.Context, tok *provider.Token, item provide
 	}
 
 	dlReq := larkdrive.NewDownloadExportTaskReqBuilder().FileToken(fileToken).Build()
-	dlResp, err := p.client.Drive.ExportTask.Download(ctx, dlReq, opt)
-	if err != nil {
-		return nil, fmt.Errorf("download export: %w", err)
-	}
-	if !dlResp.Success() {
-		return nil, fmt.Errorf("download export: code=%d msg=%s", dlResp.Code, dlResp.Msg)
+	var dlResp *larkdrive.DownloadExportTaskResp
+	if err := p.call(ctx, "download export", func() (bool, int, string, error) {
+		var e error
+		dlResp, e = p.client.Drive.ExportTask.Download(ctx, dlReq, opt)
+		if e != nil {
+			return false, 0, "", e
+		}
+		return dlResp.Success(), dlResp.Code, dlResp.Msg, nil
+	}); err != nil {
+		return nil, err
 	}
 	data, err := io.ReadAll(dlResp.File)
 	if err != nil {
@@ -379,14 +452,13 @@ func (p *Provider) Delete(ctx context.Context, tok *provider.Token, item provide
 		FileToken(item.ExternalID).
 		Type(item.DocType).
 		Build()
-	resp, err := p.client.Drive.File.Delete(ctx, req, larkcore.WithUserAccessToken(tok.AccessToken))
-	if err != nil {
-		return fmt.Errorf("delete %s %q: %w", item.DocType, item.ExternalID, err)
-	}
-	if !resp.Success() {
-		return fmt.Errorf("delete %s %q: code=%d msg=%s", item.DocType, item.ExternalID, resp.Code, resp.Msg)
-	}
-	return nil
+	return p.call(ctx, fmt.Sprintf("delete %s %q", item.DocType, item.ExternalID), func() (bool, int, string, error) {
+		resp, e := p.client.Drive.File.Delete(ctx, req, larkcore.WithUserAccessToken(tok.AccessToken))
+		if e != nil {
+			return false, 0, "", e
+		}
+		return resp.Success(), resp.Code, resp.Msg, nil
+	})
 }
 
 // pollExport polls the export task until it succeeds, returning the result file token.
@@ -394,12 +466,19 @@ func (p *Provider) pollExport(ctx context.Context, accessToken, ticket, token st
 	const maxAttempts = 60 // ~60s with 1s interval
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		getReq := larkdrive.NewGetExportTaskReqBuilder().Ticket(ticket).Token(token).Build()
-		getResp, err := p.client.Drive.ExportTask.Get(ctx, getReq, opt)
-		if err != nil {
-			return "", fmt.Errorf("get export task: %w", err)
+		var getResp *larkdrive.GetExportTaskResp
+		if err := p.call(ctx, "get export task", func() (bool, int, string, error) {
+			var e error
+			getResp, e = p.client.Drive.ExportTask.Get(ctx, getReq, opt)
+			if e != nil {
+				return false, 0, "", e
+			}
+			return getResp.Success(), getResp.Code, getResp.Msg, nil
+		}); err != nil {
+			return "", err
 		}
-		if !getResp.Success() || getResp.Data.Result == nil {
-			return "", fmt.Errorf("get export task: code=%d msg=%s", getResp.Code, getResp.Msg)
+		if getResp.Data.Result == nil {
+			return "", fmt.Errorf("get export task: no result")
 		}
 		res := getResp.Data.Result
 		status := 0
