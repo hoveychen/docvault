@@ -1,12 +1,68 @@
 package feishu
 
 import (
+	"context"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/hoveychen/docvault/internal/config"
 )
+
+func testProvider() *Provider {
+	return New(config.FeishuConnection{Key: "feishu", Label: "Lark", AppID: "cli_x", AppSecret: "s", Domain: "lark"})
+}
+
+func TestCall_SuccessNoRetry(t *testing.T) {
+	p := testProvider()
+	calls := 0
+	err := p.call(context.Background(), "x", func() (bool, int, string, error) {
+		calls++
+		return true, 0, "", nil
+	})
+	if err != nil || calls != 1 {
+		t.Fatalf("want success in 1 call, got err=%v calls=%d", err, calls)
+	}
+}
+
+func TestCall_NonRateLimitNoRetry(t *testing.T) {
+	p := testProvider()
+	calls := 0
+	err := p.call(context.Background(), "x", func() (bool, int, string, error) {
+		calls++
+		return false, 1254005, "permission denied", nil // not the frequency-limit code
+	})
+	if err == nil || calls != 1 {
+		t.Fatalf("want immediate error without retry, got err=%v calls=%d", err, calls)
+	}
+}
+
+func TestCall_RetriesOnFrequencyLimit(t *testing.T) {
+	p := testProvider()
+	calls := 0
+	err := p.call(context.Background(), "x", func() (bool, int, string, error) {
+		calls++
+		if calls < 2 {
+			return false, codeFrequencyLimit, "request trigger frequency limit", nil
+		}
+		return true, 0, "", nil
+	})
+	if err != nil || calls != 2 {
+		t.Fatalf("want success after one backoff, got err=%v calls=%d", err, calls)
+	}
+}
+
+func TestCall_TransportErrorReturned(t *testing.T) {
+	p := testProvider()
+	want := errors.New("boom")
+	err := p.call(context.Background(), "x", func() (bool, int, string, error) {
+		return false, 0, "", want
+	})
+	if err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("want transport error surfaced, got %v", err)
+	}
+}
 
 // AuthCodeURL must include app_id — Feishu/Lark's authorize endpoint requires it
 // to identify the app, otherwise the authorization page errors.
