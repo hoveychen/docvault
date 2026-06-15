@@ -391,7 +391,7 @@ function ListView(p: ListProps) {
           </th>
           <SortableTh label="名称" col="name" sort={p.sort} onSort={p.onSort} />
           <th>类型</th>
-          {p.showFolderCol && <th>位置</th>}
+          {p.showFolderCol && <th className="col-loc">位置</th>}
           <SortableTh label="大小" col="size" sort={p.sort} onSort={p.onSort} />
           <SortableTh label="同步时间" col="date" sort={p.sort} onSort={p.onSort} />
           <th className="col-actions" />
@@ -480,7 +480,7 @@ function FolderRow({
       <td>
         <Badge tone="neutral">文件夹</Badge>
       </td>
-      {showFolderCol && <td className="text-tertiary">—</td>}
+      {showFolderCol && <td className="col-loc text-tertiary">—</td>}
       <td className="num">—</td>
       <td className="num">
         {deleted ? <Badge tone="danger">原件已删</Badge> : "—"}
@@ -528,7 +528,13 @@ function DocRow({
       <td>
         <Badge tone="neutral">{v.label}</Badge>
       </td>
-      {showFolderCol && <td className="text-tertiary">{doc.source_path || "/"}</td>}
+      {showFolderCol && (
+        <td className="col-loc text-tertiary">
+          <span className="cell-ellipsis" title={doc.source_path || "/"}>
+            {doc.source_path || "/"}
+          </span>
+        </td>
+      )}
       <td className="num">{archived ? formatSize(doc.size_bytes) : "—"}</td>
       <td className="num">
         {deleted ? (
