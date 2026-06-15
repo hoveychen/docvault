@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -22,6 +23,11 @@ type Config struct {
 
 	TokenEncKey string // base64, 32 bytes, for AES-256-GCM of provider tokens
 	JWTSecret   string
+
+	// SyncInterval enables scheduled background sync: every linked account whose
+	// last successful sync is older than this gets auto-enqueued. Zero = disabled
+	// (sync is on-demand only). Parsed from DOCVAULT_SYNC_INTERVAL (e.g. "6h").
+	SyncInterval time.Duration
 
 	// FeishuConnections is one entry per Feishu/Lark org (self-built app). Each
 	// becomes its own provider keyed by Key.
@@ -66,6 +72,14 @@ func Load() (*Config, error) {
 		},
 		TokenEncKey: os.Getenv("DOCVAULT_TOKEN_ENC_KEY"),
 		JWTSecret:   os.Getenv("DOCVAULT_JWT_SECRET"),
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("DOCVAULT_SYNC_INTERVAL")); raw != "" {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return nil, fmt.Errorf("parse DOCVAULT_SYNC_INTERVAL: %w", err)
+		}
+		c.SyncInterval = d
 	}
 
 	conns, err := loadFeishuConnections()

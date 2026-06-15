@@ -595,3 +595,41 @@ func (r *Repo) DeleteConnection(ctx context.Context, id string) error {
 	}
 	return err
 }
+
+// DueAccount identifies a provider account that should be auto-synced.
+type DueAccount struct {
+	AccountID string
+	UserID    string
+	Provider  string
+}
+
+// AccountsDueForSync returns accounts with no queued/running job and no
+// successful sync finished after cutoff (= now - interval). Banned users are
+// excluded. Used by the scheduler for periodic background sync.
+func (r *Repo) AccountsDueForSync(ctx context.Context, cutoff time.Time) ([]DueAccount, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT pa.id, pa.user_id, pa.provider
+		   FROM provider_accounts pa
+		   JOIN users u ON u.id = pa.user_id AND NOT u.banned
+		  WHERE NOT EXISTS (
+		          SELECT 1 FROM sync_jobs j
+		           WHERE j.provider_account_id = pa.id AND j.status IN ('queued','running'))
+		    AND NOT EXISTS (
+		          SELECT 1 FROM sync_jobs j
+		           WHERE j.provider_account_id = pa.id
+		             AND j.status = 'succeeded' AND j.finished_at > $1)`,
+		cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DueAccount
+	for rows.Next() {
+		var d DueAccount
+		if err := rows.Scan(&d.AccountID, &d.UserID, &d.Provider); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
