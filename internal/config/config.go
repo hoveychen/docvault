@@ -29,9 +29,23 @@ type Config struct {
 	// (sync is on-demand only). Parsed from DOCVAULT_SYNC_INTERVAL (e.g. "6h").
 	SyncInterval time.Duration
 
-	// FeishuConnections is one entry per Feishu/Lark org (self-built app). Each
-	// becomes its own provider keyed by Key.
-	FeishuConnections []FeishuConnection
+	// Connections is one entry per org connection across all provider types. Each
+	// becomes its own provider keyed by Key. Used only to seed the DB on first run;
+	// thereafter connections are managed via the admin UI.
+	Connections []ProviderConnection
+}
+
+// ProviderConnection is one org connection for any provider type, parsed from env
+// to seed the DB on first run. Type selects the provider implementation (feishu,
+// google, microsoft, tencent); AppID/AppSecret are the OAuth client credential;
+// Domain carries a type-specific variant (feishu/lark, or the Entra tenant).
+type ProviderConnection struct {
+	Type      string `json:"provider_type"`
+	Key       string `json:"key"`
+	Label     string `json:"label"`
+	AppID     string `json:"app_id"`
+	AppSecret string `json:"app_secret"`
+	Domain    string `json:"domain"`
 }
 
 type S3Config struct {
@@ -82,16 +96,62 @@ func Load() (*Config, error) {
 		c.SyncInterval = d
 	}
 
-	conns, err := loadFeishuConnections()
+	conns, err := loadConnections()
 	if err != nil {
 		return nil, err
 	}
-	c.FeishuConnections = conns
+	c.Connections = conns
 
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// loadConnections builds the unified connection list seeded into the DB on first
+// run: the legacy Feishu env (DOCVAULT_FEISHU_*) as feishu-typed connections, plus
+// any in DOCVAULT_PROVIDER_CONNECTIONS (a JSON array carrying provider_type, for
+// google/microsoft/tencent or additional feishu orgs). Keys must be unique across
+// the whole set.
+func loadConnections() ([]ProviderConnection, error) {
+	var conns []ProviderConnection
+
+	feishu, err := loadFeishuConnections()
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range feishu {
+		conns = append(conns, ProviderConnection{
+			Type: "feishu", Key: f.Key, Label: f.Label, AppID: f.AppID, AppSecret: f.AppSecret, Domain: f.Domain,
+		})
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("DOCVAULT_PROVIDER_CONNECTIONS")); raw != "" {
+		var extra []ProviderConnection
+		if err := json.Unmarshal([]byte(raw), &extra); err != nil {
+			return nil, fmt.Errorf("parse DOCVAULT_PROVIDER_CONNECTIONS: %w", err)
+		}
+		conns = append(conns, extra...)
+	}
+
+	seen := map[string]bool{}
+	for i := range conns {
+		c := &conns[i]
+		if c.Type == "" {
+			c.Type = "feishu"
+		}
+		if c.Key == "" || c.AppID == "" || c.AppSecret == "" {
+			return nil, fmt.Errorf("provider connection %d (type %q) missing key/app_id/app_secret", i, c.Type)
+		}
+		if c.Label == "" {
+			c.Label = c.Key
+		}
+		if seen[c.Key] {
+			return nil, fmt.Errorf("duplicate connection key %q", c.Key)
+		}
+		seen[c.Key] = true
+	}
+	return conns, nil
 }
 
 // loadFeishuConnections reads either DOCVAULT_FEISHU_CONNECTIONS (a JSON array of
@@ -159,9 +219,9 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// FeishuConfigured reports whether at least one Feishu/Lark org is configured.
-func (c *Config) FeishuConfigured() bool {
-	return len(c.FeishuConnections) > 0
+// Configured reports whether at least one provider org connection is configured.
+func (c *Config) Configured() bool {
+	return len(c.Connections) > 0
 }
 
 func envOr(key, def string) string {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/hoveychen/docvault/internal/db"
 	"github.com/hoveychen/docvault/internal/models"
+	"github.com/hoveychen/docvault/internal/provider"
 )
 
 func (h *Handler) adminListUsers(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +112,14 @@ func (h *Handler) adminListConnections(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"connections": conns})
 }
 
+// adminProviderTypes lists the provider implementation types the build supports,
+// so the admin connection form can offer them in a dropdown.
+func (h *Handler) adminProviderTypes(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"types": provider.FactoryTypes()})
+}
+
 type connectionBody struct {
+	Type      string `json:"provider_type"`
 	Key       string `json:"key"`
 	Label     string `json:"label"`
 	AppID     string `json:"app_id"`
@@ -125,11 +133,19 @@ func (h *Handler) adminCreateConnection(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
+	if b.Type == "" {
+		b.Type = "feishu"
+	}
+	if !provider.HasFactory(b.Type) {
+		writeError(w, http.StatusBadRequest, "unknown provider_type")
+		return
+	}
 	if b.Key == "" || b.AppID == "" || b.AppSecret == "" {
 		writeError(w, http.StatusBadRequest, "key, app_id and app_secret are required")
 		return
 	}
-	if b.Domain == "" {
+	// domain is a Feishu-specific variant (feishu/lark); default it only there.
+	if b.Domain == "" && b.Type == "feishu" {
 		b.Domain = "feishu"
 	}
 	if b.Label == "" {
@@ -140,7 +156,7 @@ func (h *Handler) adminCreateConnection(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusInternalServerError, "encrypt failed")
 		return
 	}
-	if err := h.app.Repo.CreateConnection(r.Context(), b.Key, b.Label, b.AppID, b.Domain, secretEnc); err != nil {
+	if err := h.app.Repo.CreateConnection(r.Context(), b.Type, b.Key, b.Label, b.AppID, b.Domain, secretEnc); err != nil {
 		writeError(w, http.StatusConflict, "create failed (duplicate key?)")
 		return
 	}
@@ -153,9 +169,6 @@ func (h *Handler) adminUpdateConnection(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
-	}
-	if b.Domain == "" {
-		b.Domain = "feishu"
 	}
 	// Empty app_secret means "keep the existing one".
 	var secretEnc *string
