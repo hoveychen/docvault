@@ -170,6 +170,15 @@
 .file-row.is-selected {
   background: var(--bg-selected);
 }
+.file-row.is-unarchived .file-row__name {
+  color: var(--text-secondary);
+}
+.file-row.is-unarchived .file-row__name svg {
+  opacity: 0.55;
+}
+.grid-card.is-unarchived {
+  opacity: 0.7;
+}
 .file-row__name {
   display: flex;
   align-items: center;
