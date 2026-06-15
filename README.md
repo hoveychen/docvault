@@ -77,6 +77,23 @@ so a Lark App ID/Secret only works with `DOCVAULT_FEISHU_DOMAIN=lark` (and vice 
 > provider key, not the tenant type. The actual host (open.feishu.cn vs open.larksuite.com) is
 > chosen by `DOCVAULT_FEISHU_DOMAIN`.
 
+### Multiple orgs
+
+A self-built app belongs to one org, so to serve **several** Feishu/Lark orgs set
+`DOCVAULT_FEISHU_CONNECTIONS` to a JSON array — one object per org, each with a unique `key`:
+
+```json
+[{"key":"acme","label":"Acme (Lark)","app_id":"cli_xxx","app_secret":"yyy","domain":"lark"},
+ {"key":"globex","label":"Globex (飞书)","app_id":"cli_zzz","app_secret":"www","domain":"feishu"}]
+```
+
+Each org gets its own OAuth route `/api/auth/<key>/callback` (register that exact URL in *that*
+org's app console) and the login page lists one button per org. Data is isolated per org by the
+`key` (it's stored as the provider on every account/document/folder). When
+`DOCVAULT_FEISHU_CONNECTIONS` is set it takes precedence over the single-org vars above. (Truly
+cross-tenant "install from the app store" requires an ISV/Marketplace app — a separate, heavier
+app type — not covered here.)
+
 **Local OAuth works on `localhost`** — the redirect happens in *your browser* (which can reach
 localhost) and the token exchange is an *outbound* call from your server. No public ingress is
 needed. Just register the exact `http://localhost:8080/...` callback and set

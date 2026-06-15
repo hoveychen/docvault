@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type DocItem, type FolderItem, type SyncStatus, type User } from "./api";
-
-const PROVIDER_LABELS: Record<string, string> = {
-  feishu: "飞书 / Lark",
-  google: "Google Workspace",
-  o365: "Office 365",
-};
+import {
+  api,
+  type DocItem,
+  type FolderItem,
+  type ProviderInfo,
+  type SyncStatus,
+  type User,
+} from "./api";
 
 export function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [providers, setProviders] = useState<string[]>([]);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
 
   useEffect(() => {
     api.providers().then((p) => setProviders(p.providers || [])).catch(() => {});
@@ -29,18 +30,18 @@ export function App() {
   );
 }
 
-function Login({ providers }: { providers: string[] }) {
+function Login({ providers }: { providers: ProviderInfo[] }) {
   return (
     <div className="center">
       <div className="card login">
         <h1>docvault</h1>
         <p className="muted">把你的云文档一键归档到本地可下载的副本。</p>
         {providers.length === 0 && (
-          <p className="error">尚未配置任何云文档来源（检查服务端 Feishu 凭据）。</p>
+          <p className="error">尚未配置任何云文档来源（检查服务端 Feishu/Lark 凭据）。</p>
         )}
         {providers.map((p) => (
-          <a key={p} className="btn primary block" href={api.loginUrl(p)}>
-            使用 {PROVIDER_LABELS[p] ?? p} 授权登录
+          <a key={p.key} className="btn primary block" href={api.loginUrl(p.key)}>
+            使用 {p.label} 授权登录
           </a>
         ))}
       </div>
