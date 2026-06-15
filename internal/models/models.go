@@ -78,6 +78,30 @@ type SyncJob struct {
 	FinishedAt        *time.Time    `json:"finished_at,omitempty"`
 }
 
+// JobItem statuses: one row per source item snapshotted for a sliced sync job.
+const (
+	JobItemPending = "pending"
+	JobItemDone    = "done"
+	JobItemFailed  = "failed"
+)
+
+// JobItem is one unit of work in a sliced sync job. On first claim the engine
+// snapshots every item the provider lists into sync_job_items, then processes
+// them across time-bounded slices, marking each done/failed as it goes.
+type JobItem struct {
+	ID              int64  `json:"id"`
+	JobID           string `json:"job_id"`
+	ExternalID      string `json:"external_id"`
+	Title           string `json:"title"`
+	DocType         string `json:"doc_type"`
+	SourcePath      string `json:"source_path"`
+	OwnerExternalID string `json:"owner_external_id"`
+	IsFolder        bool   `json:"is_folder"`
+	Status          string `json:"status"` // pending | done | failed
+	Attempts        int    `json:"attempts"`
+	Error           string `json:"error,omitempty"`
+}
+
 // Document is one archived file stored in object storage.
 type Document struct {
 	ID         string    `json:"id"`

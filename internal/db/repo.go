@@ -233,7 +233,11 @@ func (r *Repo) EnqueueSyncJob(ctx context.Context, userID, accountID, provider s
 	return id, err
 }
 
-// ClaimJob atomically claims the oldest queued job, marking it running.
+// ClaimJob atomically claims the next queued job, marking it running. Ordering is
+// round-robin across slices: never-sliced jobs (last_sliced_at IS NULL) go first
+// by creation order, then the job whose last slice is oldest — so a big account's
+// re-queued slices yield the worker to other users' work. started_at is preserved
+// across re-claims so it still marks the first time the job started.
 // Returns ErrNotFound when the queue is empty.
 func (r *Repo) ClaimJob(ctx context.Context) (*models.SyncJob, error) {
 	tx, err := r.pool.Begin(ctx)
@@ -245,7 +249,8 @@ func (r *Repo) ClaimJob(ctx context.Context) (*models.SyncJob, error) {
 	var id string
 	err = tx.QueryRow(ctx,
 		`SELECT id FROM sync_jobs WHERE status='queued'
-		 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&id)
+		 ORDER BY last_sliced_at ASC NULLS FIRST, created_at ASC
+		 FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -255,7 +260,7 @@ func (r *Repo) ClaimJob(ctx context.Context) (*models.SyncJob, error) {
 
 	job := &models.SyncJob{}
 	err = tx.QueryRow(ctx,
-		`UPDATE sync_jobs SET status='running', started_at=now() WHERE id=$1
+		`UPDATE sync_jobs SET status='running', started_at=COALESCE(started_at, now()) WHERE id=$1
 		 RETURNING id, user_id, provider_account_id, provider, status,
 		           total_items, done_items, failed_items, created_at, started_at`,
 		id,
@@ -270,6 +275,15 @@ func (r *Repo) ClaimJob(ctx context.Context) (*models.SyncJob, error) {
 	return job, nil
 }
 
+// RequeueJob returns a partially-processed job to the queue after a slice,
+// stamping last_sliced_at=now() so the round-robin ordering moves it behind
+// users whose slices ran longer ago.
+func (r *Repo) RequeueJob(ctx context.Context, jobID string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE sync_jobs SET status='queued', last_sliced_at=now() WHERE id=$1`, jobID)
+	return err
+}
+
 func (r *Repo) UpdateJobProgress(ctx context.Context, jobID string, total, done, failed int) error {
 	_, err := r.pool.Exec(ctx,
 		`UPDATE sync_jobs SET total_items=$1, done_items=$2, failed_items=$3 WHERE id=$4`,
@@ -282,6 +296,108 @@ func (r *Repo) FinishJob(ctx context.Context, jobID string, status models.SyncJo
 		`UPDATE sync_jobs SET status=$1, error=$2, finished_at=now() WHERE id=$3`,
 		status, errMsg, jobID)
 	return err
+}
+
+// --- sync job items (sliced work list) ---
+
+// SnapshotJobItems bulk-inserts a job's full work list on its first claim. Items
+// already present (by job_id, external_id) are ignored so a re-claim that races
+// is harmless. Returns how many rows were inserted.
+func (r *Repo) SnapshotJobItems(ctx context.Context, jobID string, items []models.JobItem) (int, error) {
+	if len(items) == 0 {
+		return 0, nil
+	}
+	rows := make([][]any, len(items))
+	for i, it := range items {
+		rows[i] = []any{jobID, it.ExternalID, it.Title, it.DocType, it.SourcePath, it.OwnerExternalID, it.IsFolder}
+	}
+	// CopyFrom can't express ON CONFLICT, so stage into a temp table then insert
+	// with a conflict guard — keeps the snapshot idempotent across re-claims.
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	if _, err := tx.Exec(ctx,
+		`CREATE TEMP TABLE _snap (
+		    external_id TEXT, title TEXT, doc_type TEXT, source_path TEXT,
+		    owner_external_id TEXT, is_folder BOOLEAN
+		 ) ON COMMIT DROP`); err != nil {
+		return 0, err
+	}
+	src := make([][]any, len(items))
+	for i, it := range items {
+		src[i] = []any{it.ExternalID, it.Title, it.DocType, it.SourcePath, it.OwnerExternalID, it.IsFolder}
+	}
+	if _, err := tx.CopyFrom(ctx, pgx.Identifier{"_snap"},
+		[]string{"external_id", "title", "doc_type", "source_path", "owner_external_id", "is_folder"},
+		pgx.CopyFromRows(src)); err != nil {
+		return 0, err
+	}
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO sync_job_items
+		   (job_id, external_id, title, doc_type, source_path, owner_external_id, is_folder)
+		 SELECT $1, external_id, title, doc_type, source_path, owner_external_id, is_folder FROM _snap
+		 ON CONFLICT (job_id, external_id) DO NOTHING`, jobID)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// JobItemCount reports how many work-list rows a job has (0 before its first
+// claim snapshots the list).
+func (r *Repo) JobItemCount(ctx context.Context, jobID string) (int, error) {
+	var n int
+	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM sync_job_items WHERE job_id=$1`, jobID).Scan(&n)
+	return n, err
+}
+
+// PendingJobItems returns up to limit still-pending items for a job, oldest first.
+func (r *Repo) PendingJobItems(ctx context.Context, jobID string, limit int) ([]models.JobItem, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, job_id, external_id, title, doc_type, source_path, owner_external_id, is_folder, status, attempts, error
+		   FROM sync_job_items
+		  WHERE job_id=$1 AND status='pending'
+		  ORDER BY id ASC LIMIT $2`, jobID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.JobItem
+	for rows.Next() {
+		var it models.JobItem
+		if err := rows.Scan(&it.ID, &it.JobID, &it.ExternalID, &it.Title, &it.DocType,
+			&it.SourcePath, &it.OwnerExternalID, &it.IsFolder, &it.Status, &it.Attempts, &it.Error); err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// MarkJobItem records the outcome of processing one item, bumping its attempt
+// count. errMsg is stored as-is (empty for success).
+func (r *Repo) MarkJobItem(ctx context.Context, itemID int64, status, errMsg string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE sync_job_items SET status=$1, error=$2, attempts=attempts+1 WHERE id=$3`,
+		status, errMsg, itemID)
+	return err
+}
+
+// JobItemStats returns the per-status counts for a job's work list.
+func (r *Repo) JobItemStats(ctx context.Context, jobID string) (total, done, failed, pending int, err error) {
+	err = r.pool.QueryRow(ctx,
+		`SELECT count(*),
+		        count(*) FILTER (WHERE status='done'),
+		        count(*) FILTER (WHERE status='failed'),
+		        count(*) FILTER (WHERE status='pending')
+		   FROM sync_job_items WHERE job_id=$1`, jobID).Scan(&total, &done, &failed, &pending)
+	return
 }
 
 // LatestJob returns the most recent job for a user, or ErrNotFound.
@@ -324,6 +440,18 @@ func (r *Repo) UpsertDocument(ctx context.Context, d *models.Document) error {
 		d.UserID, d.Provider, d.ExternalID, d.Title, d.DocType, d.Format,
 		d.SourcePath, d.ObjectKey, d.SizeBytes, d.OwnerExternalID)
 	return err
+}
+
+// IsArchived reports whether a document already has a downloadable copy
+// (object_key non-empty). Drives incremental sync: archived items are skipped
+// rather than re-exported.
+func (r *Repo) IsArchived(ctx context.Context, userID, provider, externalID string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM documents
+		   WHERE user_id=$1 AND provider=$2 AND external_id=$3 AND object_key<>'')`,
+		userID, provider, externalID).Scan(&exists)
+	return exists, err
 }
 
 const docCols = `SELECT id, user_id, provider, external_id, title, doc_type, format,
