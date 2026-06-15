@@ -120,3 +120,23 @@ type Folder struct {
 	Deletable    bool   `json:"deletable"`
 	NotDeletable string `json:"not_deletable_reason,omitempty"` // why it can't be deleted
 }
+
+// ArchiveStats summarizes a user's archive: how much is actually downloadable
+// (object_key present) vs. recorded-but-not-archived (export failed / unsupported
+// type), broken down by document type. Powers an ops/health view.
+type ArchiveStats struct {
+	Total         int        `json:"total"`          // all documents
+	Archived      int        `json:"archived"`       // have a downloadable copy (object_key<>'')
+	Unarchived    int        `json:"unarchived"`     // no copy (object_key='')
+	SourceDeleted int        `json:"source_deleted"` // cloud original moved to trash
+	Folders       int        `json:"folders"`        // source folders recorded
+	ByType        []TypeStat `json:"by_type"`        // per doc_type breakdown, archived desc
+}
+
+// TypeStat is the archived/unarchived split for one document type.
+type TypeStat struct {
+	DocType    string `json:"doc_type"`
+	Total      int    `json:"total"`
+	Archived   int    `json:"archived"`
+	Unarchived int    `json:"unarchived"`
+}

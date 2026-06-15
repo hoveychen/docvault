@@ -355,6 +355,47 @@ func (r *Repo) ListDocuments(ctx context.Context, userID string) ([]models.Docum
 	return out, rows.Err()
 }
 
+// ArchiveStats reports the per-type archived/unarchived breakdown for a user,
+// plus folder count. "archived" means a downloadable copy exists (object_key set);
+// "unarchived" means the item was recorded but never exported (object_key empty).
+func (r *Repo) ArchiveStats(ctx context.Context, userID string) (*models.ArchiveStats, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT doc_type,
+		       count(*)                                              AS total,
+		       count(*) FILTER (WHERE object_key <> '')              AS archived,
+		       count(*) FILTER (WHERE object_key = '')               AS unarchived,
+		       count(*) FILTER (WHERE source_deleted_at IS NOT NULL) AS deleted
+		FROM documents WHERE user_id=$1
+		GROUP BY doc_type ORDER BY archived DESC, total DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := &models.ArchiveStats{ByType: []models.TypeStat{}}
+	for rows.Next() {
+		var t models.TypeStat
+		var deleted int
+		if err := rows.Scan(&t.DocType, &t.Total, &t.Archived, &t.Unarchived, &deleted); err != nil {
+			return nil, err
+		}
+		stats.Total += t.Total
+		stats.Archived += t.Archived
+		stats.Unarchived += t.Unarchived
+		stats.SourceDeleted += deleted
+		stats.ByType = append(stats.ByType, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if err := r.pool.QueryRow(ctx,
+		`SELECT count(*) FROM folders WHERE user_id=$1`, userID).Scan(&stats.Folders); err != nil {
+		return nil, err
+	}
+	return stats, nil
+}
+
 // GetDocument fetches a single document scoped to the owning user.
 func (r *Repo) GetDocument(ctx context.Context, userID, id string) (*models.Document, error) {
 	d, err := scanDocument(r.pool.QueryRow(ctx, docCols+` WHERE id=$1 AND user_id=$2`, id, userID))
