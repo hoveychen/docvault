@@ -127,6 +127,9 @@ type Document struct {
 	// Deletable is computed per request: true when the signed-in user owns the
 	// doc, it is archived, and the original has not already been deleted.
 	Deletable bool `json:"deletable"`
+	// Attachments is computed per request: the embedded objects (e.g. Feishu
+	// file-attachment blocks) stored as sidecars for this document.
+	Attachments []Attachment `json:"attachments,omitempty"`
 }
 
 // Attachment is an embedded object (e.g. a Feishu file-attachment block) that
