@@ -33,6 +33,10 @@ type App struct {
 // Build connects to Postgres (running migrations), connects to object storage,
 // and assembles the provider registry and auth managers.
 func Build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, error) {
+	// Make this the default logger so library code (e.g. the Feishu provider's
+	// best-effort wiki/folder skip warnings) writes to the same stream.
+	slog.SetDefault(log)
+
 	pool, err := db.Connect(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("connect db: %w", err)
