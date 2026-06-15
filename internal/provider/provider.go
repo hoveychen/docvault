@@ -49,10 +49,13 @@ type Blob struct {
 	Data        []byte
 }
 
-// Provider abstracts one cloud-document source.
+// Provider abstracts one cloud-document source (one org connection).
 type Provider interface {
-	// Key is the stable provider identifier, e.g. "feishu".
+	// Key is the stable provider identifier used in routes and stored on
+	// documents/accounts (e.g. "feishu" or "org-acme").
 	Key() string
+	// Label is the human-readable name shown on the login page.
+	Label() string
 	// AuthCodeURL builds the OAuth authorization URL for step 1 of the flow.
 	AuthCodeURL(state, redirectURI string) string
 	// Exchange swaps an authorization code for tokens and the authorizing
@@ -90,6 +93,21 @@ func (r *Registry) Keys() []string {
 	out := make([]string, 0, len(r.providers))
 	for k := range r.providers {
 		out = append(out, k)
+	}
+	return out
+}
+
+// Info is a provider's key + display label, for the login page.
+type Info struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+}
+
+// List returns key+label for every registered provider.
+func (r *Registry) List() []Info {
+	out := make([]Info, 0, len(r.providers))
+	for _, p := range r.providers {
+		out = append(out, Info{Key: p.Key(), Label: p.Label()})
 	}
 	return out
 }

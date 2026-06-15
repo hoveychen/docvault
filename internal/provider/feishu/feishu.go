@@ -21,8 +21,6 @@ import (
 	"github.com/hoveychen/docvault/internal/provider"
 )
 
-const providerKey = "feishu"
-
 // exportable maps a Feishu doc type to the export file extension we request via
 // the export-task API. Types not present here (e.g. "file") are handled
 // separately or skipped. Per-item export failures are non-fatal (the engine
@@ -43,23 +41,26 @@ var contentTypes = map[string]string{
 	"pdf":  "application/pdf",
 }
 
-// Provider is the Feishu implementation.
+// Provider is one Feishu/Lark org's connection (one self-built app).
 type Provider struct {
+	key     string
+	label   string
 	client  *lark.Client
 	baseURL string // open.feishu.cn or open.larksuite.com base
 }
 
-// New builds the provider from Feishu app credentials.
-func New(cfg config.FeishuConfig) *Provider {
+// New builds a provider for one org connection.
+func New(conn config.FeishuConnection) *Provider {
 	baseURL := lark.FeishuBaseUrl
-	if strings.EqualFold(cfg.Domain, "lark") {
+	if strings.EqualFold(conn.Domain, "lark") {
 		baseURL = lark.LarkBaseUrl
 	}
-	client := lark.NewClient(cfg.AppID, cfg.AppSecret, lark.WithOpenBaseUrl(baseURL))
-	return &Provider{client: client, baseURL: baseURL}
+	client := lark.NewClient(conn.AppID, conn.AppSecret, lark.WithOpenBaseUrl(baseURL))
+	return &Provider{key: conn.Key, label: conn.Label, client: client, baseURL: baseURL}
 }
 
-func (p *Provider) Key() string { return providerKey }
+func (p *Provider) Key() string   { return p.key }
+func (p *Provider) Label() string { return p.label }
 
 // AuthCodeURL builds the authorization redirect (Feishu authen v1, scope-aware).
 func (p *Provider) AuthCodeURL(state, redirectURI string) string {

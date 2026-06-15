@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -22,7 +23,9 @@ type Config struct {
 	TokenEncKey string // base64, 32 bytes, for AES-256-GCM of provider tokens
 	JWTSecret   string
 
-	Feishu FeishuConfig
+	// FeishuConnections is one entry per Feishu/Lark org (self-built app). Each
+	// becomes its own provider keyed by Key.
+	FeishuConnections []FeishuConnection
 }
 
 type S3Config struct {
@@ -34,10 +37,14 @@ type S3Config struct {
 	Region    string
 }
 
-type FeishuConfig struct {
-	AppID     string
-	AppSecret string
-	Domain    string // "feishu" or "lark"
+// FeishuConnection is one org's self-built app. Key is the stable provider key
+// used in routes and stored on documents/accounts (e.g. "feishu" or "org-acme").
+type FeishuConnection struct {
+	Key       string `json:"key"`
+	Label     string `json:"label"`
+	AppID     string `json:"app_id"`
+	AppSecret string `json:"app_secret"`
+	Domain    string `json:"domain"` // "feishu" or "lark"
 }
 
 // Load reads configuration. It first loads .env if present (non-fatal when absent),
@@ -59,17 +66,66 @@ func Load() (*Config, error) {
 		},
 		TokenEncKey: os.Getenv("DOCVAULT_TOKEN_ENC_KEY"),
 		JWTSecret:   os.Getenv("DOCVAULT_JWT_SECRET"),
-		Feishu: FeishuConfig{
-			AppID:     os.Getenv("DOCVAULT_FEISHU_APP_ID"),
-			AppSecret: os.Getenv("DOCVAULT_FEISHU_APP_SECRET"),
-			Domain:    envOr("DOCVAULT_FEISHU_DOMAIN", "feishu"),
-		},
 	}
+
+	conns, err := loadFeishuConnections()
+	if err != nil {
+		return nil, err
+	}
+	c.FeishuConnections = conns
 
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// loadFeishuConnections reads either DOCVAULT_FEISHU_CONNECTIONS (a JSON array of
+// connections — one per org) or the legacy single DOCVAULT_FEISHU_APP_ID/SECRET
+// pair (treated as one connection keyed "feishu"). Keys must be unique.
+func loadFeishuConnections() ([]FeishuConnection, error) {
+	var conns []FeishuConnection
+
+	if raw := strings.TrimSpace(os.Getenv("DOCVAULT_FEISHU_CONNECTIONS")); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &conns); err != nil {
+			return nil, fmt.Errorf("parse DOCVAULT_FEISHU_CONNECTIONS: %w", err)
+		}
+	} else if id := os.Getenv("DOCVAULT_FEISHU_APP_ID"); id != "" {
+		domain := envOr("DOCVAULT_FEISHU_DOMAIN", "feishu")
+		conns = append(conns, FeishuConnection{
+			Key:       "feishu",
+			Label:     defaultLabel(domain),
+			AppID:     id,
+			AppSecret: os.Getenv("DOCVAULT_FEISHU_APP_SECRET"),
+			Domain:    domain,
+		})
+	}
+
+	seen := map[string]bool{}
+	for i := range conns {
+		conn := &conns[i]
+		if conn.Key == "" || conn.AppID == "" || conn.AppSecret == "" {
+			return nil, fmt.Errorf("feishu connection %d missing key/app_id/app_secret", i)
+		}
+		if conn.Domain == "" {
+			conn.Domain = "feishu"
+		}
+		if conn.Label == "" {
+			conn.Label = defaultLabel(conn.Domain)
+		}
+		if seen[conn.Key] {
+			return nil, fmt.Errorf("duplicate feishu connection key %q", conn.Key)
+		}
+		seen[conn.Key] = true
+	}
+	return conns, nil
+}
+
+func defaultLabel(domain string) string {
+	if strings.EqualFold(domain, "lark") {
+		return "Lark"
+	}
+	return "飞书"
 }
 
 func (c *Config) validate() error {
@@ -89,9 +145,9 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// FeishuConfigured reports whether the Feishu provider has credentials.
+// FeishuConfigured reports whether at least one Feishu/Lark org is configured.
 func (c *Config) FeishuConfigured() bool {
-	return c.Feishu.AppID != "" && c.Feishu.AppSecret != ""
+	return len(c.FeishuConnections) > 0
 }
 
 func envOr(key, def string) string {

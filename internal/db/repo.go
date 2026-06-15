@@ -113,6 +113,24 @@ func (r *Repo) GetAccountForUser(ctx context.Context, userID, provider string) (
 	return r.scanAccount(r.pool.QueryRow(ctx, accountCols+` WHERE user_id=$1 AND provider=$2`, userID, provider))
 }
 
+// GetAccountsForUser returns all provider accounts linked to a user (normally one).
+func (r *Repo) GetAccountsForUser(ctx context.Context, userID string) ([]*models.ProviderAccount, error) {
+	rows, err := r.pool.Query(ctx, accountCols+` WHERE user_id=$1 ORDER BY created_at`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*models.ProviderAccount
+	for rows.Next() {
+		a, err := r.scanAccount(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
 const accountCols = `SELECT id, user_id, provider, external_user_id, access_token_enc, refresh_token_enc,
 	access_token_expires, refresh_token_expires, created_at, updated_at FROM provider_accounts`
 

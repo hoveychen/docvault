@@ -57,7 +57,7 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"providers": h.app.Registry.Keys()})
+	writeJSON(w, http.StatusOK, map[string]any{"providers": h.app.Registry.List()})
 }
 
 // login redirects the browser to the provider's OAuth authorization page.
@@ -413,21 +413,18 @@ func (h *Handler) startSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Sync the user's first linked provider (Feishu in the MVP).
-	keys := h.app.Registry.Keys()
-	if len(keys) == 0 {
-		writeError(w, http.StatusServiceUnavailable, "no providers configured")
-		return
-	}
-	acct, err := h.app.Repo.GetAccountForUser(ctx, userID, keys[0])
-	if errors.Is(err, db.ErrNotFound) {
-		writeError(w, http.StatusBadRequest, "no linked provider account")
-		return
-	}
+	// Sync the account this user actually authorized (a docvault user is created
+	// per provider+external-user, so they have exactly one linked account).
+	accts, err := h.app.Repo.GetAccountsForUser(ctx, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "account lookup failed")
 		return
 	}
+	if len(accts) == 0 {
+		writeError(w, http.StatusBadRequest, "no linked provider account")
+		return
+	}
+	acct := accts[0]
 
 	jobID, err := h.app.Repo.EnqueueSyncJob(ctx, userID, acct.ID, acct.Provider)
 	if err != nil {

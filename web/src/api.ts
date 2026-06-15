@@ -30,6 +30,11 @@ export interface FolderItem {
   source_deleted_at?: string | null;
 }
 
+export interface ProviderInfo {
+  key: string;
+  label: string;
+}
+
 export interface DeleteResult {
   id: string;
   status: string;
@@ -56,7 +61,7 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   me: () => req<User>("/api/me"),
-  providers: () => req<{ providers: string[] }>("/api/providers"),
+  providers: () => req<{ providers: ProviderInfo[] }>("/api/providers"),
   documents: () => req<{ documents: DocItem[] }>("/api/documents"),
   folders: () => req<{ folders: FolderItem[] }>("/api/folders"),
   syncStatus: () => req<SyncStatus>("/api/sync/status"),

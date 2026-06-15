@@ -54,11 +54,12 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, err
 	}
 
 	var provs []provider.Provider
-	if cfg.FeishuConfigured() {
-		provs = append(provs, feishu.New(cfg.Feishu))
-		log.Info("provider enabled", "provider", "feishu")
-	} else {
-		log.Warn("feishu provider not configured (missing app id/secret)")
+	for _, conn := range cfg.FeishuConnections {
+		provs = append(provs, feishu.New(conn))
+		log.Info("provider enabled", "provider", conn.Key, "domain", conn.Domain, "label", conn.Label)
+	}
+	if len(provs) == 0 {
+		log.Warn("no feishu/lark connections configured")
 	}
 	registry := provider.NewRegistry(provs...)
 
