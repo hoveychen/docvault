@@ -75,5 +75,13 @@ func (m *TokenManager) ValidToken(ctx context.Context, acct *models.ProviderAcco
 		refreshed.AccessExpiresAt, refreshed.RefreshExpiresAt); err != nil {
 		return nil, fmt.Errorf("persist refreshed token: %w", err)
 	}
+	// Mirror the refreshed token back onto the in-memory account so a later call
+	// on the same acct (the sync engine reuses one acct across every item in a
+	// slice) sees the fresh token instead of re-refreshing with the now-rotated
+	// refresh token, which Feishu rejects (code=20026, "refresh token ... used").
+	acct.AccessTokenEnc = accessEnc
+	acct.RefreshTokenEnc = refreshEnc
+	acct.AccessTokenExpires = refreshed.AccessExpiresAt
+	acct.RefreshTokenExpires = refreshed.RefreshExpiresAt
 	return refreshed, nil
 }
