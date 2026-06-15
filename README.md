@@ -46,13 +46,42 @@ make web-dev   # http://localhost:5173
 For a production-style single-origin run, `cd web && pnpm build` then just `make server` —
 the server serves `web/dist` and the API from the same origin on `:8080`.
 
-## Feishu app setup
+## Feishu / Lark app setup
 
-1. Create a **self-built app** at <https://open.feishu.cn/app>.
-2. Copy **App ID** / **App Secret** into `.env`.
-3. Add a **redirect URL**: `<DOCVAULT_PUBLIC_URL>/api/auth/feishu/callback`
-   (e.g. `http://localhost:8080/api/auth/feishu/callback`).
-4. Grant read-only scopes: `drive:drive:readonly`, `docs:document:readonly`.
+docvault supports **both** Feishu (open.feishu.cn, mainland China) and Lark
+(open.larksuite.com, international) — pick one with `DOCVAULT_FEISHU_DOMAIN`:
+
+| Your tenant | Console | `DOCVAULT_FEISHU_DOMAIN` |
+|-------------|---------|--------------------------|
+| 飞书 (mainland) | <https://open.feishu.cn/app> | `feishu` (default) |
+| **Lark** (international) | <https://open.larksuite.com/app> | `lark` |
+
+The app is created in the matching console — the two are **separate ecosystems**,
+so a Lark App ID/Secret only works with `DOCVAULT_FEISHU_DOMAIN=lark` (and vice versa).
+
+**Steps (Lark shown; Feishu is identical on its own console):**
+
+1. Create a **self-built app (自建应用)** at <https://open.larksuite.com/app>.
+2. Copy **App ID** / **App Secret** into `.env`, and set `DOCVAULT_FEISHU_DOMAIN=lark`.
+3. Under **Security settings → Redirect URLs (安全设置 → 重定向 URL)**, add the **exact**
+   callback: `<DOCVAULT_PUBLIC_URL>/api/auth/feishu/callback`
+   (e.g. `http://localhost:8080/api/auth/feishu/callback`). `http://localhost` is allowed
+   for development.
+4. Under **Permissions (权限管理)**, grant read-only scopes:
+   `drive:drive:readonly`, `docs:document:readonly`, `wiki:wiki:readonly`.
+   To use the **delete cloud original** feature, also grant write access (`drive:drive`)
+   so the owner can move documents to trash.
+5. Publish/enable the app for your org so the scopes take effect.
+
+> The OAuth route is `/api/auth/feishu/callback` for both domains — `feishu` is the internal
+> provider key, not the tenant type. The actual host (open.feishu.cn vs open.larksuite.com) is
+> chosen by `DOCVAULT_FEISHU_DOMAIN`.
+
+**Local OAuth works on `localhost`** — the redirect happens in *your browser* (which can reach
+localhost) and the token exchange is an *outbound* call from your server. No public ingress is
+needed. Just register the exact `http://localhost:8080/...` callback and set
+`DOCVAULT_PUBLIC_URL=http://localhost:8080`. For local testing use the single-origin mode
+(`pnpm build` + server on `:8080`); don't run OAuth through the Vite `:5173` dev port.
 
 ## Deploy
 

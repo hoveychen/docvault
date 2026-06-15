@@ -15,7 +15,11 @@ Then edit `.env`:
 
 - `DOCVAULT_PUBLIC_URL` — the public URL browsers hit (e.g. `https://vault.example.com`). The
   Feishu OAuth `redirect_uri` is derived from it.
-- `DOCVAULT_FEISHU_APP_ID` / `DOCVAULT_FEISHU_APP_SECRET` — from your self-built Feishu app.
+- `DOCVAULT_FEISHU_APP_ID` / `DOCVAULT_FEISHU_APP_SECRET` — from your self-built app.
+- `DOCVAULT_FEISHU_DOMAIN` — `feishu` (open.feishu.cn) or `lark` (open.larksuite.com); must
+  match the console where the app was created. See the README for the per-domain setup steps.
+- `DOCVAULT_HOST_PORT` — optional; host port to publish the server on (default `8080`). Set this
+  if `8080` is already taken on the host.
 - `POSTGRES_PASSWORD` — optional; defaults to `docvault`. Set a real one in production.
 - `DOCVAULT_S3_ACCESS_KEY` / `DOCVAULT_S3_SECRET_KEY` — MinIO root creds; set real values.
 

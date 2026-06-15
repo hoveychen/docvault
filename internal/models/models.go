@@ -67,4 +67,14 @@ type Document struct {
 	ObjectKey  string    `json:"object_key"`  // S3 key
 	SizeBytes  int64     `json:"size_bytes"`
 	SyncedAt   time.Time `json:"synced_at"`
+
+	// OwnerExternalID is the provider id of the document owner. Deletion of the
+	// cloud original is gated to the owning user only.
+	OwnerExternalID string `json:"-"`
+	// SourceDeletedAt is set once the cloud original has been deleted (the data
+	// now lives only in docvault).
+	SourceDeletedAt *time.Time `json:"source_deleted_at,omitempty"`
+	// Deletable is computed per request: true when the signed-in user owns the
+	// doc, it is archived, and the original has not already been deleted.
+	Deletable bool `json:"deletable"`
 }

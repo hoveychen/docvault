@@ -16,6 +16,14 @@ export interface DocItem {
   source_path: string;
   size_bytes: number;
   synced_at: string;
+  deletable: boolean;
+  source_deleted_at?: string | null;
+}
+
+export interface DeleteResult {
+  id: string;
+  status: string;
+  error?: string;
 }
 
 export interface SyncStatus {
@@ -43,6 +51,12 @@ export const api = {
   syncStatus: () => req<SyncStatus>("/api/sync/status"),
   startSync: () => req<{ job_id: string; status: string }>("/api/sync", { method: "POST" }),
   logout: () => req<{ status: string }>("/api/auth/logout", { method: "POST" }),
+  deleteSource: (ids: string[]) =>
+    req<{ results: DeleteResult[] }>("/api/documents/delete-source", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document_ids: ids }),
+    }),
   loginUrl: (provider: string) => `/api/auth/${provider}/login`,
   downloadUrl: (id: string) => `/api/documents/${id}/download`,
 };

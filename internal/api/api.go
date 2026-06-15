@@ -12,6 +12,7 @@ import (
 	"github.com/hoveychen/docvault/internal/app"
 	"github.com/hoveychen/docvault/internal/db"
 	"github.com/hoveychen/docvault/internal/models"
+	"github.com/hoveychen/docvault/internal/provider"
 )
 
 const (
@@ -38,6 +39,7 @@ func NewRouter(a *app.App) http.Handler {
 	mux.Handle("GET /api/me", h.requireUser(h.me))
 	mux.Handle("GET /api/documents", h.requireUser(h.listDocuments))
 	mux.Handle("GET /api/documents/{id}/download", h.requireUser(h.downloadDocument))
+	mux.Handle("POST /api/documents/delete-source", h.requireUser(h.deleteSource))
 	mux.Handle("POST /api/sync", h.requireUser(h.startSync))
 	mux.Handle("GET /api/sync/status", h.requireUser(h.syncStatus))
 
@@ -154,7 +156,9 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listDocuments(w http.ResponseWriter, r *http.Request) {
-	docs, err := h.app.Repo.ListDocuments(r.Context(), userIDFrom(r))
+	ctx := r.Context()
+	userID := userIDFrom(r)
+	docs, err := h.app.Repo.ListDocuments(ctx, userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "list failed")
 		return
@@ -162,7 +166,111 @@ func (h *Handler) listDocuments(w http.ResponseWriter, r *http.Request) {
 	if docs == nil {
 		docs = []models.Document{}
 	}
+	// Compute per-doc deletability: the signed-in user must own the doc, it must
+	// be archived, and the original must not already be deleted.
+	ownerIDs := map[string]string{} // provider -> this user's external id
+	for i := range docs {
+		d := &docs[i]
+		extID, ok := ownerIDs[d.Provider]
+		if !ok {
+			if acct, aerr := h.app.Repo.GetAccountForUser(ctx, userID, d.Provider); aerr == nil {
+				extID = acct.ExternalUserID
+			}
+			ownerIDs[d.Provider] = extID
+		}
+		d.Deletable = d.ObjectKey != "" && d.SourceDeletedAt == nil &&
+			d.OwnerExternalID != "" && d.OwnerExternalID == extID
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"documents": docs})
+}
+
+// deleteSource deletes the cloud originals of the given archived documents,
+// gating on ownership + archival. Each item is processed independently; the
+// response reports per-document outcomes.
+func (h *Handler) deleteSource(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userID := userIDFrom(r)
+
+	var body struct {
+		DocumentIDs []string `json:"document_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.DocumentIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "document_ids required")
+		return
+	}
+
+	docs, err := h.app.Repo.GetDocumentsByIDs(ctx, userID, body.DocumentIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "lookup failed")
+		return
+	}
+
+	// Cache provider account + valid token per provider.
+	type provCtx struct {
+		extID string
+		tok   *provider.Token
+		prov  provider.Provider
+	}
+	cache := map[string]*provCtx{}
+	results := make([]map[string]string, 0, len(docs))
+
+	for i := range docs {
+		d := &docs[i]
+		res := map[string]string{"id": d.ID}
+
+		if d.ObjectKey == "" || d.SourceDeletedAt != nil {
+			res["status"] = "skipped"
+			res["error"] = "not archived or already deleted"
+			results = append(results, res)
+			continue
+		}
+
+		pc := cache[d.Provider]
+		if pc == nil {
+			pc = &provCtx{prov: h.app.Registry.Get(d.Provider)}
+			if acct, aerr := h.app.Repo.GetAccountForUser(ctx, userID, d.Provider); aerr == nil {
+				pc.extID = acct.ExternalUserID
+				if pc.prov != nil {
+					if tok, terr := h.app.Tokens.ValidToken(ctx, acct); terr == nil {
+						pc.tok = tok
+					}
+				}
+			}
+			cache[d.Provider] = pc
+		}
+
+		if pc.prov == nil || pc.tok == nil {
+			res["status"] = "error"
+			res["error"] = "provider unavailable"
+			results = append(results, res)
+			continue
+		}
+		if d.OwnerExternalID == "" || d.OwnerExternalID != pc.extID {
+			res["status"] = "forbidden"
+			res["error"] = "you are not the owner of this document"
+			results = append(results, res)
+			continue
+		}
+
+		item := provider.Item{ExternalID: d.ExternalID, Title: d.Title, DocType: d.DocType}
+		if derr := pc.prov.Delete(ctx, pc.tok, item); derr != nil {
+			h.app.Log.Error("delete source failed", "doc_id", d.ID, "err", derr)
+			res["status"] = "error"
+			res["error"] = "delete failed"
+			results = append(results, res)
+			continue
+		}
+		if err := h.app.Repo.MarkSourceDeleted(ctx, userID, d.ID); err != nil {
+			res["status"] = "error"
+			res["error"] = "deleted in cloud but failed to record"
+			results = append(results, res)
+			continue
+		}
+		res["status"] = "deleted"
+		results = append(results, res)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 func (h *Handler) downloadDocument(w http.ResponseWriter, r *http.Request) {
