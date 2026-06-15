@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import {
   ArrowDownToLine,
@@ -46,6 +47,7 @@ interface Props {
 const VIEW_KEY = "docvault-view";
 
 export function Browser({ mode, path = "", provider = "" }: Props) {
+  const { t } = useTranslation();
   const vault = useVault();
   const { tree, docs, loading } = vault;
   const navigate = useNavigate();
@@ -164,10 +166,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
   const runDelete = async () => {
     const docIds = [...selDocs];
     const folderIds = [...selFolders];
-    const ok = window.confirm(
-      `确定删除所选 ${selCount} 项的云端原件吗？\n\n` +
-        `它们会被移入飞书 / Lark 回收站（可恢复），归档副本仍保留在 docvault。`,
-    );
+    const ok = window.confirm(t("browse.confirmDelete", { count: selCount }));
     if (!ok) return;
     setWorking(true);
     try {
@@ -181,7 +180,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
         errs.push(...r.failed);
       }
       clearSel();
-      if (errs.length) alert(`部分未删除：${errs.join("，")}`);
+      if (errs.length) alert(t("browse.partialDeleteFailed", { items: errs.join("，") }));
     } finally {
       setWorking(false);
     }
@@ -197,7 +196,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
         ) : (
           <span className="page-header__title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <header.icon size={16} />
-            {header.title}
+            {header.titleKey ? t(header.titleKey) : header.title}
           </span>
         )}
         <span className="page-header__spacer" />
@@ -206,14 +205,14 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
             <button
               className={view === "list" ? "is-active" : ""}
               onClick={() => setViewPersist("list")}
-              aria-label="列表视图"
+              aria-label={t("browse.listView")}
             >
               <ListIcon />
             </button>
             <button
               className={view === "grid" ? "is-active" : ""}
               onClick={() => setViewPersist("grid")}
-              aria-label="网格视图"
+              aria-label={t("browse.gridView")}
             >
               <LayoutGrid />
             </button>
@@ -224,7 +223,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
             onClick={vault.startSync}
             disabled={vault.syncing}
           >
-            {vault.syncing ? "同步中…" : "同步"}
+            {vault.syncing ? t("browse.syncing") : t("browse.sync")}
           </Button>
         </div>
       </div>
@@ -232,7 +231,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
       <div className="toolbar">
         <Input
           icon={Search}
-          placeholder={searching ? "在全部归档中搜索…" : "搜索文件…"}
+          placeholder={searching ? t("browse.searchAllPlaceholder") : t("browse.searchPlaceholder")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ width: 240 }}
@@ -244,7 +243,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value)}
           >
-            <option value="">全部类型</option>
+            <option value="">{t("browse.allTypes")}</option>
             {typeOptions.map((t) => (
               <option key={t} value={t}>
                 {t.toUpperCase()}
@@ -255,7 +254,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
         <span className="toolbar__spacer" />
         {searching && (
           <span className="text-tertiary" style={{ fontSize: 12.5 }}>
-            {sortedFolders.length + sortedDocs.length} 个结果
+            {t("browse.results", { count: sortedFolders.length + sortedDocs.length })}
             <button
               className="btn btn--ghost btn--sm"
               style={{ marginLeft: 8 }}
@@ -264,7 +263,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
                 setTypeFilter("");
               }}
             >
-              清除
+              {t("browse.clear")}
             </button>
           </span>
         )}
@@ -316,12 +315,14 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
           {selCount > 0 && (
             <div className="bulk-bar">
               <span className="bulk-bar__count">
-                已选 <b>{selCount}</b> 项
+                {t("browse.selectedPrefix")}
+                <b>{selCount}</b>
+                {t("browse.selectedSuffix")}
               </span>
               <Button variant="danger" size="sm" icon={Trash2} onClick={runDelete} disabled={working}>
-                {working ? "删除中…" : "删除云端原件"}
+                {working ? t("browse.deleting") : t("browse.deleteOriginals")}
               </Button>
-              <IconButton icon={X} size="sm" onClick={clearSel} label="取消选择" />
+              <IconButton icon={X} size="sm" onClick={clearSel} label={t("browse.clearSelection")} />
             </div>
           )}
         </div>
@@ -334,6 +335,7 @@ export function Browser({ mode, path = "", provider = "" }: Props) {
 
 /* ---------------- Breadcrumb ---------------- */
 function Breadcrumb({ path, onNav }: { path: string; onNav: (p: string) => void }) {
+  const { t } = useTranslation();
   const items = crumbs(path);
   return (
     <nav className="crumbs">
@@ -342,7 +344,7 @@ function Breadcrumb({ path, onNav }: { path: string; onNav: (p: string) => void 
         onClick={() => onNav("")}
       >
         <Home />
-        全部文件
+        {t("nav.allFiles")}
       </span>
       {items.map((c, i) => (
         <span key={c.path} style={{ display: "inline-flex", alignItems: "center" }}>
@@ -381,6 +383,7 @@ interface ListProps {
 }
 
 function ListView(p: ListProps) {
+  const { t } = useTranslation();
   return (
     <table className="file-table">
       <thead>
@@ -397,11 +400,11 @@ function ListView(p: ListProps) {
               disabled={!p.hasDeletable}
             />
           </th>
-          <SortableTh label="名称" col="name" sort={p.sort} onSort={p.onSort} />
-          <th>类型</th>
-          {p.showFolderCol && <th className="col-loc">位置</th>}
-          <SortableTh label="大小" col="size" sort={p.sort} onSort={p.onSort} />
-          <SortableTh label="同步时间" col="date" sort={p.sort} onSort={p.onSort} />
+          <SortableTh label={t("browse.colName")} col="name" sort={p.sort} onSort={p.onSort} />
+          <th>{t("browse.colType")}</th>
+          {p.showFolderCol && <th className="col-loc">{t("browse.colLocation")}</th>}
+          <SortableTh label={t("browse.colSize")} col="size" sort={p.sort} onSort={p.onSort} />
+          <SortableTh label={t("browse.colSyncTime")} col="date" sort={p.sort} onSort={p.onSort} />
           <th className="col-actions" />
         </tr>
       </thead>
@@ -466,6 +469,7 @@ function FolderRow({
   onOpen: () => void;
   showFolderCol: boolean;
 }) {
+  const { t } = useTranslation();
   const deletable = folder.folder?.deletable;
   const deleted = folder.folder?.source_deleted_at;
   return (
@@ -477,7 +481,7 @@ function FolderRow({
           checked={selected}
           disabled={!deletable}
           onChange={onToggle}
-          title={folder.folder?.not_deletable_reason || (deletable ? "" : "无法删除")}
+          title={folder.folder?.not_deletable_reason || (deletable ? "" : t("browse.cannotDelete"))}
         />
       </td>
       <td>
@@ -487,12 +491,12 @@ function FolderRow({
         </div>
       </td>
       <td>
-        <Badge tone="neutral">文件夹</Badge>
+        <Badge tone="neutral">{t("common.folder")}</Badge>
       </td>
       {showFolderCol && <td className="col-loc text-tertiary">—</td>}
       <td className="num">—</td>
       <td className="num">
-        {deleted ? <Badge tone="danger">原件已删</Badge> : "—"}
+        {deleted ? <Badge tone="danger">{t("browse.sourceDeleted")}</Badge> : "—"}
       </td>
       <td className="col-actions" />
     </tr>
@@ -512,6 +516,7 @@ function DocRow({
   showFolderCol: boolean;
   onPreview: (d: DocItem) => void;
 }) {
+  const { t } = useTranslation();
   const v = fileVisual(doc);
   const deleted = !!doc.source_deleted_at;
   const archived = doc.object_key !== "";
@@ -532,7 +537,7 @@ function DocRow({
           checked={selected}
           disabled={!doc.deletable}
           onChange={onToggle}
-          title={doc.deletable ? "" : "非本人拥有或未归档，无法删除"}
+          title={doc.deletable ? "" : t("browse.cannotDeleteDoc")}
         />
       </td>
       <td>
@@ -540,7 +545,7 @@ function DocRow({
           <v.Icon color={v.color} />
           <span>{doc.title}</span>
           {doc.attachments && doc.attachments.length > 0 && (
-            <Tooltip label={`${doc.attachments.length} 个内嵌附件`}>
+            <Tooltip label={t("browse.attachmentCount", { count: doc.attachments.length })}>
               <span className="file-row__attach">
                 <Paperclip size={13} />
                 {doc.attachments.length}
@@ -562,19 +567,19 @@ function DocRow({
       <td className="num">{archived ? formatSize(doc.size_bytes) : "—"}</td>
       <td className="num">
         {deleted ? (
-          <Badge tone="danger">原件已删</Badge>
+          <Badge tone="danger">{t("browse.sourceDeleted")}</Badge>
         ) : archived ? (
           formatRelative(doc.synced_at)
         ) : (
-          <Tooltip label="该类型未导出副本（缺导出权限或类型不支持），暂不可下载">
-            <Badge tone="warning">未归档</Badge>
+          <Tooltip label={t("browse.unarchivedTooltip")}>
+            <Badge tone="warning">{t("browse.unarchived")}</Badge>
           </Tooltip>
         )}
       </td>
       <td className="col-actions" onClick={(e) => e.stopPropagation()}>
         <div className="row-actions">
           {archived && (
-            <Tooltip label="下载">
+            <Tooltip label={t("common.download")}>
               <a href={api.downloadUrl(doc.id)} className="icon-btn icon-btn--sm">
                 <ArrowDownToLine />
               </a>
@@ -606,6 +611,7 @@ function GridView({
   onOpenFolder: (p: string) => void;
   onPreview: (d: DocItem) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="file-grid">
       {folders.map((f) => {
@@ -629,7 +635,7 @@ function GridView({
               <Folder color="var(--accent-subtle-fg)" />
             </div>
             <div className="grid-card__name">{f.name}</div>
-            <div className="grid-card__meta">文件夹</div>
+            <div className="grid-card__meta">{t("common.folder")}</div>
           </div>
         );
       })}
@@ -663,9 +669,9 @@ function GridView({
             <div className="grid-card__name">{d.title}</div>
             <div className="grid-card__meta">
               {d.source_deleted_at
-                ? "原件已删"
+                ? t("browse.sourceDeleted")
                 : d.object_key === ""
-                  ? "未归档"
+                  ? t("browse.unarchived")
                   : `${v.label} · ${formatSize(d.size_bytes)}`}
             </div>
           </div>
@@ -677,6 +683,7 @@ function GridView({
 
 /* ---------------- Sync banner ---------------- */
 function SyncBanner() {
+  const { t } = useTranslation();
   const { status, error } = useVault();
   if (error) {
     return <div className="sync-banner sync-banner--error">{error}</div>;
@@ -688,7 +695,7 @@ function SyncBanner() {
   if (status.status === "failed") {
     return (
       <div className="sync-banner sync-banner--error">
-        同步失败{status.error ? `：${status.error}` : ""}
+        {status.error ? t("browse.syncFailedReason", { error: status.error }) : t("browse.syncFailed")}
       </div>
     );
   }
@@ -696,7 +703,7 @@ function SyncBanner() {
     <div className="sync-banner">
       <Spinner size={15} />
       <span style={{ whiteSpace: "nowrap" }}>
-        {status.status === "queued" ? "排队中" : "同步中"} {done}/{total}
+        {status.status === "queued" ? t("browse.queued") : t("browse.syncingShort")} {done}/{total}
       </span>
       <div className="sync-progress">
         <div className="sync-progress__bar" style={{ width: `${pct}%` }} />
@@ -719,14 +726,15 @@ function EmptyState({
   onSync: () => void;
   syncing: boolean;
 }) {
+  const { t } = useTranslation();
   if (mode === "trash") {
     return (
       <div className="empty">
         <span className="empty__icon">
           <Trash2 />
         </span>
-        <div className="empty__title">回收站为空</div>
-        <div className="empty__desc">删除了云端原件的文档会出现在这里——归档副本仍可下载。</div>
+        <div className="empty__title">{t("browse.emptyTrashTitle")}</div>
+        <div className="empty__desc">{t("browse.emptyTrashDesc")}</div>
       </div>
     );
   }
@@ -736,12 +744,10 @@ function EmptyState({
         <span className="empty__icon">
           <FolderOpen />
         </span>
-        <div className="empty__title">还没有归档</div>
-        <div className="empty__desc">
-          点击「同步」，docvault 会扫描你授权账号能访问的云文档，导出后存入归档。
-        </div>
+        <div className="empty__title">{t("browse.emptyArchiveTitle")}</div>
+        <div className="empty__desc">{t("browse.emptyArchiveDesc")}</div>
         <Button variant="primary" icon={RefreshCw} onClick={onSync} disabled={syncing}>
-          {syncing ? "同步中…" : "立即同步"}
+          {syncing ? t("browse.syncing") : t("browse.syncNow")}
         </Button>
       </div>
     );
@@ -751,22 +757,23 @@ function EmptyState({
       <span className="empty__icon">
         <FolderOpen />
       </span>
-      <div className="empty__title">这里什么都没有</div>
+      <div className="empty__title">{t("browse.emptyTitle")}</div>
       <div className="empty__desc">
-        {mode === "source" ? "该来源下还没有归档文档。" : "此文件夹为空。"}
+        {mode === "source" ? t("browse.emptySourceDesc") : t("browse.emptyFolderDesc")}
       </div>
     </div>
   );
 }
 
 function SearchEmpty() {
+  const { t } = useTranslation();
   return (
     <div className="empty">
       <span className="empty__icon">
         <SearchX />
       </span>
-      <div className="empty__title">没有匹配的文件</div>
-      <div className="empty__desc">换个关键词，或清除筛选条件再试。</div>
+      <div className="empty__title">{t("browse.searchEmptyTitle")}</div>
+      <div className="empty__desc">{t("browse.searchEmptyDesc")}</div>
     </div>
   );
 }
@@ -787,15 +794,17 @@ function ListSkeleton() {
   );
 }
 
+// Returns an i18n key for fixed modes, or a raw title (the provider name) for
+// the "source" mode; the caller resolves titleKey through t().
 function headerMeta(mode: Mode, _path: string, provider: string) {
   switch (mode) {
     case "recent":
-      return { title: "最近同步", icon: Clock };
+      return { titleKey: "nav.recent", title: "", icon: Clock };
     case "source":
-      return { title: provider, icon: Cloud };
+      return { titleKey: null, title: provider, icon: Cloud };
     case "trash":
-      return { title: "回收站", icon: Trash2 };
+      return { titleKey: "nav.trash", title: "", icon: Trash2 };
     default:
-      return { title: "全部文件", icon: Files };
+      return { titleKey: "nav.allFiles", title: "", icon: Files };
   }
 }

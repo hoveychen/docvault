@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   BrowserRouter,
   Navigate,
@@ -21,6 +22,7 @@ export interface OutletCtx {
 export const usePageUser = () => useOutletContext<OutletCtx>().user;
 
 export function App() {
+  const { t } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -38,7 +40,7 @@ export function App() {
     return (
       <div className="center-screen">
         <Spinner size={20} />
-        加载中…
+        {t("common.loading")}
       </div>
     );
   }

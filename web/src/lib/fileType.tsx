@@ -11,11 +11,20 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { DocItem } from "../api";
+import i18n from "./i18n";
 
 export interface FileVisual {
   Icon: LucideIcon;
   color: string; // hue for the icon tint
   label: string; // short type label
+}
+
+// Doc-type visuals carry an i18n key instead of a literal label, so the label
+// is resolved at call time and follows the active language.
+interface DocTypeVisual {
+  Icon: LucideIcon;
+  color: string;
+  labelKey: string;
 }
 
 const TEXT = "#5b8def";
@@ -58,21 +67,24 @@ const BY_FORMAT: Record<string, FileVisual> = {
 };
 
 // Feishu/Lark native doc_type fallbacks when no exported format is present.
-const BY_DOCTYPE: Record<string, FileVisual> = {
-  docx: { Icon: FileText, color: TEXT, label: "文档" },
-  doc: { Icon: FileText, color: TEXT, label: "文档" },
-  sheet: { Icon: FileSpreadsheet, color: SHEET, label: "表格" },
-  bitable: { Icon: FileSpreadsheet, color: SHEET, label: "多维表格" },
-  slides: { Icon: Presentation, color: SLIDE, label: "幻灯片" },
-  mindnote: { Icon: FileCode, color: CODE, label: "思维笔记" },
-  file: { Icon: File, color: GENERIC, label: "文件" },
+const BY_DOCTYPE: Record<string, DocTypeVisual> = {
+  docx: { Icon: FileText, color: TEXT, labelKey: "fileType.doc" },
+  doc: { Icon: FileText, color: TEXT, labelKey: "fileType.doc" },
+  sheet: { Icon: FileSpreadsheet, color: SHEET, labelKey: "fileType.sheet" },
+  bitable: { Icon: FileSpreadsheet, color: SHEET, labelKey: "fileType.bitable" },
+  slides: { Icon: Presentation, color: SLIDE, labelKey: "fileType.slides" },
+  mindnote: { Icon: FileCode, color: CODE, labelKey: "fileType.mindnote" },
+  file: { Icon: File, color: GENERIC, labelKey: "fileType.file" },
 };
 
 export function fileVisual(doc: Pick<DocItem, "format" | "doc_type">): FileVisual {
   const fmt = (doc.format || "").toLowerCase();
   if (fmt && BY_FORMAT[fmt]) return BY_FORMAT[fmt];
   const dt = (doc.doc_type || "").toLowerCase();
-  if (dt && BY_DOCTYPE[dt]) return BY_DOCTYPE[dt];
+  if (dt && BY_DOCTYPE[dt]) {
+    const v = BY_DOCTYPE[dt];
+    return { Icon: v.Icon, color: v.color, label: i18n.t(v.labelKey) };
+  }
   if (fmt) return { Icon: File, color: GENERIC, label: fmt.toUpperCase() };
-  return { Icon: File, color: GENERIC, label: dt || "文件" };
+  return { Icon: File, color: GENERIC, label: dt || i18n.t("fileType.file") };
 }
