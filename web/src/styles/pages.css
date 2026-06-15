@@ -186,6 +186,7 @@
   color: var(--text);
   font-weight: 450;
   min-width: 0;
+  max-width: 420px;
 }
 .file-row__name svg {
   width: 17px;
@@ -193,6 +194,7 @@
   flex-shrink: 0;
 }
 .file-row__name span {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -203,6 +205,16 @@
 .col-actions {
   width: 84px;
   text-align: right;
+}
+/* Location column: cap width and ellipsis-truncate long folder paths so the
+   table never grows past its container and pushes 大小/同步时间 off-screen.
+   The cap lives on the inner block (not the <td>) because table cells ignore
+   max-width under auto table-layout. */
+.cell-ellipsis {
+  display: block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .row-actions {
   display: inline-flex;
