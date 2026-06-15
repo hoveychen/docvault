@@ -17,6 +17,7 @@ import (
 	_ "github.com/hoveychen/docvault/internal/provider/feishu"
 	_ "github.com/hoveychen/docvault/internal/provider/google"
 	_ "github.com/hoveychen/docvault/internal/provider/microsoft"
+	_ "github.com/hoveychen/docvault/internal/provider/tencent"
 	"github.com/hoveychen/docvault/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
