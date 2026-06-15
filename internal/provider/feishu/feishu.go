@@ -15,6 +15,7 @@ import (
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkauthen "github.com/larksuite/oapi-sdk-go/v3/service/authen/v1"
+	larkdocx "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
 	larkdrive "github.com/larksuite/oapi-sdk-go/v3/service/drive/v1"
 	larkwiki "github.com/larksuite/oapi-sdk-go/v3/service/wiki/v2"
 	"golang.org/x/time/rate"
@@ -137,10 +138,15 @@ func (p *Provider) AuthCodeURL(state, redirectURI string) string {
 	//   - drive:export:readonly — create export tasks for native docs (docx/sheet/
 	//     bitable). WITHOUT it the export task returns 99991679 Unauthorized and
 	//     every native doc fails to archive (only raw "file" types download directly).
+	//   - docx:document:readonly — read a docx's block tree so we can find embedded
+	//     file-attachment blocks (the export task bakes inline images into the .docx
+	//     but DROPS attachment files; we re-download those via the media API). Without
+	//     this scope the blocks listing returns a permission error and attachments are
+	//     silently lost. (NOTE: docs:document:readonly with an 's' is NOT a valid Lark
+	//     scope — error 20043; the docx-namespaced one below is the correct privilege.)
 	// (Deleting cloud originals additionally needs the writable drive:drive scope
-	// granted in the app console; docs:document:readonly is NOT a valid Lark scope —
-	// error 20043 — so we use drive:export:readonly, the privilege Lark itself names.)
-	q.Set("scope", "drive:drive:readonly wiki:wiki:readonly drive:export:readonly")
+	// granted in the app console.)
+	q.Set("scope", "drive:drive:readonly wiki:wiki:readonly drive:export:readonly docx:document:readonly")
 	return fmt.Sprintf("%s/open-apis/authen/v1/authorize?%s", p.baseURL, q.Encode())
 }
 
@@ -384,6 +390,124 @@ func (p *Provider) downloadBinary(ctx context.Context, accessToken string, item 
 	}
 
 	filename := sanitizeFilename(item.Title)
+	ext := ""
+	if i := strings.LastIndex(filename, "."); i >= 0 && i < len(filename)-1 {
+		ext = filename[i+1:]
+	}
+	return &provider.Blob{
+		Filename:    filename,
+		Format:      ext,
+		ContentType: "application/octet-stream",
+		Data:        data,
+	}, nil
+}
+
+// attachmentRef is one embedded file-attachment block discovered in a docx.
+type attachmentRef struct {
+	token string // media file_token to feed the media-download API
+	name  string // original filename (file blocks carry it; may be empty)
+}
+
+// collectFileTokens extracts the file-attachment blocks from one page of docx
+// blocks. It is pure (no I/O) so the block-shape handling can be unit-tested
+// against synthetic block lists. Image blocks are intentionally skipped: the
+// export task already bakes inline images into the .docx, so re-downloading them
+// here would duplicate bytes — only attachment files are dropped by export.
+func collectFileTokens(blocks []*larkdocx.Block) []attachmentRef {
+	var refs []attachmentRef
+	for _, b := range blocks {
+		if b == nil || b.File == nil {
+			continue
+		}
+		token := strDeref(b.File.Token)
+		if token == "" {
+			continue
+		}
+		refs = append(refs, attachmentRef{token: token, name: strDeref(b.File.Name)})
+	}
+	return refs
+}
+
+// Attachments implements provider.AttachmentExporter: it enumerates a docx
+// document's block tree and downloads every embedded file-attachment block via
+// the media-download API. Only "docx" items have a block tree we can read; all
+// other types (doc/sheet/bitable/slides/file/folder) return nil. A single
+// failed attachment download is logged and skipped rather than failing the doc.
+func (p *Provider) Attachments(ctx context.Context, tok *provider.Token, item provider.Item) ([]provider.Attachment, error) {
+	if item.DocType != "docx" {
+		return nil, nil
+	}
+	opt := larkcore.WithUserAccessToken(tok.AccessToken)
+	refs, err := p.collectAttachmentBlocks(ctx, item.ExternalID, opt)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]provider.Attachment, 0, len(refs))
+	for _, ref := range refs {
+		blob, err := p.downloadMedia(ctx, ref, opt)
+		if err != nil {
+			slog.Default().Warn("skip feishu attachment", "doc", item.ExternalID, "token", ref.token, "err", err)
+			continue
+		}
+		out = append(out, provider.Attachment{ExternalID: ref.token, Blob: blob})
+	}
+	return out, nil
+}
+
+// collectAttachmentBlocks pages through a docx's blocks, accumulating every
+// file-attachment block's token + name.
+func (p *Provider) collectAttachmentBlocks(ctx context.Context, docID string, opt larkcore.RequestOptionFunc) ([]attachmentRef, error) {
+	var refs []attachmentRef
+	pageToken := ""
+	for {
+		b := larkdocx.NewListDocumentBlockReqBuilder().DocumentId(docID).PageSize(500).UserIdType("open_id")
+		if pageToken != "" {
+			b.PageToken(pageToken)
+		}
+		var resp *larkdocx.ListDocumentBlockResp
+		if err := p.call(ctx, fmt.Sprintf("list doc blocks %q", docID), func() (bool, int, string, error) {
+			var e error
+			resp, e = p.client.Docx.DocumentBlock.List(ctx, b.Build(), opt)
+			if e != nil {
+				return false, 0, "", e
+			}
+			return resp.Success(), resp.Code, resp.Msg, nil
+		}); err != nil {
+			return nil, err
+		}
+		refs = append(refs, collectFileTokens(resp.Data.Items)...)
+		if resp.Data.HasMore != nil && *resp.Data.HasMore && resp.Data.PageToken != nil && *resp.Data.PageToken != "" {
+			pageToken = *resp.Data.PageToken
+			continue
+		}
+		return refs, nil
+	}
+}
+
+// downloadMedia fetches one embedded media object by its file_token.
+func (p *Provider) downloadMedia(ctx context.Context, ref attachmentRef, opt larkcore.RequestOptionFunc) (*provider.Blob, error) {
+	req := larkdrive.NewDownloadMediaReqBuilder().FileToken(ref.token).Build()
+	var resp *larkdrive.DownloadMediaResp
+	if err := p.call(ctx, "download media", func() (bool, int, string, error) {
+		var e error
+		resp, e = p.client.Drive.Media.Download(ctx, req, opt)
+		if e != nil {
+			return false, 0, "", e
+		}
+		return resp.Success(), resp.Code, resp.Msg, nil
+	}); err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(resp.File)
+	if err != nil {
+		return nil, fmt.Errorf("read media bytes: %w", err)
+	}
+
+	filename := ref.name
+	if filename == "" {
+		filename = resp.FileName
+	}
+	filename = sanitizeFilename(filename)
 	ext := ""
 	if i := strings.LastIndex(filename, "."); i >= 0 && i < len(filename)-1 {
 		ext = filename[i+1:]

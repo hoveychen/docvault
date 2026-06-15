@@ -42,6 +42,7 @@ func NewRouter(a *app.App) http.Handler {
 	mux.Handle("GET /api/stats", h.requireUser(h.archiveStats))
 	mux.Handle("GET /api/documents", h.requireUser(h.listDocuments))
 	mux.Handle("GET /api/documents/{id}/download", h.requireUser(h.downloadDocument))
+	mux.Handle("GET /api/documents/{id}/attachments/{aid}/download", h.requireUser(h.downloadAttachment))
 	mux.Handle("POST /api/documents/delete-source", h.requireUser(h.deleteSource))
 	mux.Handle("GET /api/folders", h.requireUser(h.listFolders))
 	mux.Handle("POST /api/folders/delete-source", h.requireUser(h.deleteFolderSource))
@@ -193,6 +194,14 @@ func (h *Handler) listDocuments(w http.ResponseWriter, r *http.Request) {
 	if docs == nil {
 		docs = []models.Document{}
 	}
+	// Embedded attachments, fetched once and grouped by document, so a doc with
+	// file-attachment blocks shows its sidecars alongside the main export.
+	attByDoc := map[string][]models.Attachment{}
+	if atts, aerr := h.app.Repo.ListAttachmentsForUser(ctx, userID); aerr == nil {
+		for _, a := range atts {
+			attByDoc[a.DocumentID] = append(attByDoc[a.DocumentID], a)
+		}
+	}
 	// Compute per-doc deletability: the signed-in user must own the doc, it must
 	// be archived, and the original must not already be deleted.
 	ownerIDs := map[string]string{} // provider -> this user's external id
@@ -207,6 +216,7 @@ func (h *Handler) listDocuments(w http.ResponseWriter, r *http.Request) {
 		}
 		d.Deletable = d.ObjectKey != "" && d.SourceDeletedAt == nil &&
 			d.OwnerExternalID != "" && d.OwnerExternalID == extID
+		d.Attachments = attByDoc[d.ID]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"documents": docs})
 }
@@ -331,6 +341,42 @@ func (h *Handler) downloadDocument(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	if size > 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, reader)
+}
+
+// downloadAttachment streams one embedded attachment, scoped to the owning user
+// via its parent document (so the id can't be used to reach another user's bytes).
+func (h *Handler) downloadAttachment(w http.ResponseWriter, r *http.Request) {
+	att, err := h.app.Repo.GetAttachment(r.Context(), userIDFrom(r), r.PathValue("aid"))
+	if errors.Is(err, db.ErrNotFound) {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "lookup failed")
+		return
+	}
+
+	reader, contentType, size, err := h.app.Store.Open(r.Context(), att.ObjectKey)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "open object failed")
+		return
+	}
+	defer reader.Close()
+
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", contentType)
+	if size > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	}
+	filename := att.Filename
+	if filename == "" {
+		filename = "attachment"
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.WriteHeader(http.StatusOK)

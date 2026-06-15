@@ -429,16 +429,17 @@ func (r *Repo) HasActiveJob(ctx context.Context, userID string) (bool, error) {
 
 // UpsertDocument records (or refreshes) an archived document by natural key.
 func (r *Repo) UpsertDocument(ctx context.Context, d *models.Document) error {
-	_, err := r.pool.Exec(ctx,
+	err := r.pool.QueryRow(ctx,
 		`INSERT INTO documents
 		   (user_id, provider, external_id, title, doc_type, format, source_path, object_key, size_bytes, owner_external_id, synced_at)
 		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
 		 ON CONFLICT (user_id, provider, external_id) DO UPDATE SET
 		   title=EXCLUDED.title, doc_type=EXCLUDED.doc_type, format=EXCLUDED.format,
 		   source_path=EXCLUDED.source_path, object_key=EXCLUDED.object_key,
-		   size_bytes=EXCLUDED.size_bytes, owner_external_id=EXCLUDED.owner_external_id, synced_at=now()`,
+		   size_bytes=EXCLUDED.size_bytes, owner_external_id=EXCLUDED.owner_external_id, synced_at=now()
+		 RETURNING id`,
 		d.UserID, d.Provider, d.ExternalID, d.Title, d.DocType, d.Format,
-		d.SourcePath, d.ObjectKey, d.SizeBytes, d.OwnerExternalID)
+		d.SourcePath, d.ObjectKey, d.SizeBytes, d.OwnerExternalID).Scan(&d.ID)
 	return err
 }
 
@@ -557,6 +558,68 @@ func (r *Repo) MarkSourceDeleted(ctx context.Context, userID, id string) error {
 	_, err := r.pool.Exec(ctx,
 		`UPDATE documents SET source_deleted_at=now() WHERE id=$1 AND user_id=$2`, id, userID)
 	return err
+}
+
+// --- document attachments ---
+
+// UpsertAttachment records (or refreshes) one embedded attachment by its natural
+// key (document_id, external_id), so re-syncs don't duplicate rows.
+func (r *Repo) UpsertAttachment(ctx context.Context, a *models.Attachment) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO document_attachments
+		   (document_id, external_id, filename, format, content_type, object_key, size_bytes)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7)
+		 ON CONFLICT (document_id, external_id) DO UPDATE SET
+		   filename=EXCLUDED.filename, format=EXCLUDED.format,
+		   content_type=EXCLUDED.content_type, object_key=EXCLUDED.object_key,
+		   size_bytes=EXCLUDED.size_bytes`,
+		a.DocumentID, a.ExternalID, a.Filename, a.Format, a.ContentType, a.ObjectKey, a.SizeBytes)
+	return err
+}
+
+const attachmentCols = `SELECT id, document_id, external_id, filename, format,
+	content_type, object_key, size_bytes, created_at FROM document_attachments`
+
+func scanAttachment(row pgx.Row) (*models.Attachment, error) {
+	a := &models.Attachment{}
+	err := row.Scan(&a.ID, &a.DocumentID, &a.ExternalID, &a.Filename, &a.Format,
+		&a.ContentType, &a.ObjectKey, &a.SizeBytes, &a.CreatedAt)
+	return a, err
+}
+
+// ListAttachmentsForUser returns every attachment belonging to the user's
+// documents, so the documents endpoint can group them by document_id in one
+// query rather than N+1.
+func (r *Repo) ListAttachmentsForUser(ctx context.Context, userID string) ([]models.Attachment, error) {
+	rows, err := r.pool.Query(ctx,
+		attachmentCols+` WHERE document_id IN (SELECT id FROM documents WHERE user_id=$1)
+		 ORDER BY created_at`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []models.Attachment
+	for rows.Next() {
+		a, err := scanAttachment(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *a)
+	}
+	return out, rows.Err()
+}
+
+// GetAttachment fetches one attachment scoped to the owning user (via its parent
+// document), so the download endpoint can't be used to reach another user's bytes.
+func (r *Repo) GetAttachment(ctx context.Context, userID, id string) (*models.Attachment, error) {
+	a, err := scanAttachment(r.pool.QueryRow(ctx,
+		attachmentCols+` WHERE id=$1 AND document_id IN (SELECT id FROM documents WHERE user_id=$2)`,
+		id, userID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return a, err
 }
 
 // --- folders ---

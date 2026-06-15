@@ -29,6 +29,15 @@ export interface ConnectionInput {
   domain: string;
 }
 
+export interface Attachment {
+  id: string;
+  document_id: string;
+  filename: string;
+  format: string;
+  size_bytes: number;
+  created_at: string;
+}
+
 export interface DocItem {
   id: string;
   provider: string;
@@ -41,6 +50,7 @@ export interface DocItem {
   synced_at: string;
   deletable: boolean;
   source_deleted_at?: string | null;
+  attachments?: Attachment[]; // embedded objects (e.g. Feishu file-attachment blocks)
 }
 
 export interface FolderItem {
@@ -121,6 +131,8 @@ export const api = {
     }),
   loginUrl: (provider: string) => `/api/auth/${provider}/login`,
   downloadUrl: (id: string) => `/api/documents/${id}/download`,
+  attachmentDownloadUrl: (docID: string, attID: string) =>
+    `/api/documents/${docID}/attachments/${attID}/download`,
 
   // --- admin ---
   adminUsers: () => req<{ users: User[] }>("/api/admin/users"),

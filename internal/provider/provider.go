@@ -50,6 +50,15 @@ type Blob struct {
 	Data        []byte
 }
 
+// Attachment is one embedded object (e.g. a file-attachment block) extracted
+// from a document that the main Export does not include. It is stored as a
+// sidecar object alongside the parent document. ExternalID is the provider's
+// stable token for the embedded object, used to dedupe across re-syncs.
+type Attachment struct {
+	ExternalID string
+	Blob       *Blob
+}
+
 // Provider abstracts one cloud-document source (one org connection).
 type Provider interface {
 	// Key is the stable provider identifier used in routes and stored on
@@ -71,6 +80,15 @@ type Provider interface {
 	// Delete removes the cloud original (moved to the provider's trash where
 	// supported). Callers must enforce ownership/archival guards first.
 	Delete(ctx context.Context, tok *Token, item Item) error
+}
+
+// AttachmentExporter is an optional Provider capability: returning the embedded
+// objects (file-attachment blocks, etc.) that an item's main Export omits. The
+// sync engine type-asserts for it and skips providers that don't implement it,
+// so adding it to one provider requires no change to the others. Returning an
+// empty slice (nil) means "no embedded objects" and is not an error.
+type AttachmentExporter interface {
+	Attachments(ctx context.Context, tok *Token, item Item) ([]Attachment, error)
 }
 
 // Registry holds the configured providers by key. It is safe for concurrent use
