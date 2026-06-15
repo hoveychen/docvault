@@ -1,0 +1,82 @@
+# Production-style stack: app server + worker + Postgres + MinIO, all in containers.
+#
+#   cp .env.example .env   # fill in secrets + Feishu creds (host values are overridden below)
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Secrets (TOKEN_ENC_KEY, JWT_SECRET, FEISHU_*) come from .env via env_file.
+# Host-specific values (DB / S3 endpoints) are overridden here to point at the
+# compose service names, so the same .env works for local dev and this stack.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: docvault
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docvault}
+      POSTGRES_DB: docvault
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U docvault"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${DOCVAULT_S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${DOCVAULT_S3_SECRET_KEY:-minioadmin}
+    ports:
+      - "9001:9001" # console (optional; remove to keep private)
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  server:
+    build: .
+    command: ["/app/bin/server"]
+    env_file: .env
+    environment:
+      DOCVAULT_HTTP_ADDR: ":8080"
+      DOCVAULT_DATABASE_URL: "postgres://docvault:${POSTGRES_PASSWORD:-docvault}@postgres:5432/docvault?sslmode=disable"
+      DOCVAULT_S3_ENDPOINT: "minio:9000"
+      DOCVAULT_S3_USE_SSL: "false"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: ["/app/bin/worker"]
+    env_file: .env
+    environment:
+      DOCVAULT_DATABASE_URL: "postgres://docvault:${POSTGRES_PASSWORD:-docvault}@postgres:5432/docvault?sslmode=disable"
+      DOCVAULT_S3_ENDPOINT: "minio:9000"
+      DOCVAULT_S3_USE_SSL: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pg-data:
+  minio-data:

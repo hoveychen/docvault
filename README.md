@@ -54,6 +54,18 @@ the server serves `web/dist` and the API from the same origin on `:8080`.
    (e.g. `http://localhost:8080/api/auth/feishu/callback`).
 4. Grant read-only scopes: `drive:drive:readonly`, `docs:document:readonly`.
 
+## Deploy
+
+One image, one compose file — see [docs/deploy.md](docs/deploy.md):
+
+```bash
+cp .env.example .env   # add secrets + Feishu creds
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Runs server + worker + Postgres + MinIO; workers scale horizontally
+(`--scale worker=N`) since the Postgres queue uses `FOR UPDATE SKIP LOCKED`.
+
 ## Layout
 
 ```

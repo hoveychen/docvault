@@ -1,0 +1,14 @@
+# Keep the build context small and deterministic.
+.git
+.worktrees
+bin
+dist
+TASKS.md
+.env
+.env.local
+*.log
+
+# Frontend deps/output are rebuilt inside the image.
+web/node_modules
+web/dist
+web/.vite
