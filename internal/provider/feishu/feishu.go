@@ -139,7 +139,7 @@ func (p *Provider) List(ctx context.Context, tok *provider.Token) ([]provider.It
 func (p *Provider) walk(ctx context.Context, accessToken, folderToken, pathPrefix string, out *[]provider.Item) error {
 	pageToken := ""
 	for {
-		b := larkdrive.NewListFileReqBuilder().PageSize(200)
+		b := larkdrive.NewListFileReqBuilder().PageSize(200).UserIdType("open_id")
 		if folderToken != "" {
 			b.FolderToken(folderToken)
 		}
@@ -170,6 +170,7 @@ func (p *Provider) walk(ctx context.Context, accessToken, folderToken, pathPrefi
 				Title:      name,
 				DocType:    typ,
 				SourcePath: pathPrefix,
+				OwnerID:    strDeref(f.OwnerId),
 			})
 		}
 
@@ -340,6 +341,24 @@ func (p *Provider) Export(ctx context.Context, tok *provider.Token, item provide
 		ContentType: contentTypes[ext],
 		Data:        data,
 	}, nil
+}
+
+// Delete moves the cloud original to the Feishu/Lark trash (recoverable).
+// The drive delete endpoint requires the object type; wiki nodes (whose owner
+// we don't capture) are never marked deletable upstream, so they don't reach here.
+func (p *Provider) Delete(ctx context.Context, tok *provider.Token, item provider.Item) error {
+	req := larkdrive.NewDeleteFileReqBuilder().
+		FileToken(item.ExternalID).
+		Type(item.DocType).
+		Build()
+	resp, err := p.client.Drive.File.Delete(ctx, req, larkcore.WithUserAccessToken(tok.AccessToken))
+	if err != nil {
+		return fmt.Errorf("delete %s %q: %w", item.DocType, item.ExternalID, err)
+	}
+	if !resp.Success() {
+		return fmt.Errorf("delete %s %q: code=%d msg=%s", item.DocType, item.ExternalID, resp.Code, resp.Msg)
+	}
+	return nil
 }
 
 // pollExport polls the export task until it succeeds, returning the result file token.

@@ -53,11 +53,14 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
     const [d, s] = await Promise.all([api.documents(), api.syncStatus()]);
     setDocs(d.documents || []);
     setStatus(s);
+    setSelected(new Set());
   }, []);
 
   useEffect(() => {
@@ -87,6 +90,42 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
   const logout = async () => {
     await api.logout().catch(() => {});
     onLogout();
+  };
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  const deletableDocs = docs.filter((d) => d.deletable);
+  const allSelected = deletableDocs.length > 0 && deletableDocs.every((d) => selected.has(d.id));
+  const toggleAll = () =>
+    setSelected(allSelected ? new Set() : new Set(deletableDocs.map((d) => d.id)));
+
+  const deleteSelected = async () => {
+    const ids = [...selected];
+    if (ids.length === 0) return;
+    const ok = window.confirm(
+      `确定要删除这 ${ids.length} 个文档的云端原件吗？\n\n` +
+        `它们会被移入飞书/Lark 回收站（可在回收站恢复），归档副本仍保留在 docvault。`
+    );
+    if (!ok) return;
+    setDeleting(true);
+    setErr("");
+    try {
+      const { results } = await api.deleteSource(ids);
+      const failed = results.filter((r) => r.status !== "deleted");
+      if (failed.length > 0) {
+        setErr(`部分未删除：${failed.map((f) => `${f.id.slice(0, 8)}(${f.error || f.status})`).join("，")}`);
+      }
+      await refresh();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const running = status?.status === "queued" || status?.status === "running";
@@ -122,31 +161,67 @@ function Dashboard({ user, onLogout }: { user: User; onLogout: () => void }) {
         </section>
 
         <section className="card">
-          <h2>已归档文档（{docs.length}）</h2>
+          <div className="row spread">
+            <h2>已归档文档（{docs.length}）</h2>
+            <button
+              className="btn danger"
+              onClick={deleteSelected}
+              disabled={deleting || selected.size === 0}
+              title="删除所选文档在云端的原件（移入回收站），完成数据私有化"
+            >
+              {deleting ? "删除中…" : `删除云端原件（${selected.size}）`}
+            </button>
+          </div>
+          <p className="muted small-note">
+            勾选你拥有且已归档的文档，可删除其云端原件——副本仍保留在 docvault。仅文件所有者可删；非本人拥有的不可勾选。
+          </p>
           {docs.length === 0 ? (
             <p className="muted">还没有归档。点击「立即同步」开始。</p>
           ) : (
             <table className="docs">
               <thead>
                 <tr>
+                  <th className="chk">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={toggleAll}
+                      disabled={deletableDocs.length === 0}
+                    />
+                  </th>
                   <th>标题</th>
                   <th>类型</th>
                   <th>路径</th>
                   <th>大小</th>
-                  <th>同步时间</th>
+                  <th>状态</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 {docs.map((d) => (
                   <tr key={d.id}>
+                    <td className="chk">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(d.id)}
+                        onChange={() => toggle(d.id)}
+                        disabled={!d.deletable}
+                        title={d.deletable ? "" : "非本人拥有或未归档，无法删除"}
+                      />
+                    </td>
                     <td>{d.title}</td>
                     <td>
                       <span className="tag">{d.format || d.doc_type}</span>
                     </td>
                     <td className="muted">{d.source_path || "/"}</td>
                     <td>{formatSize(d.size_bytes)}</td>
-                    <td className="muted">{formatTime(d.synced_at)}</td>
+                    <td>
+                      {d.source_deleted_at ? (
+                        <span className="tag deleted">原件已删</span>
+                      ) : (
+                        <span className="muted">{formatTime(d.synced_at)}</span>
+                      )}
+                    </td>
                     <td>
                       <a className="btn small" href={api.downloadUrl(d.id)}>
                         下载

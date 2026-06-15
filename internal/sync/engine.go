@@ -76,15 +76,16 @@ func (e *Engine) Run(ctx context.Context, job *models.SyncJob) error {
 		}
 
 		doc := &models.Document{
-			UserID:     job.UserID,
-			Provider:   acct.Provider,
-			ExternalID: item.ExternalID,
-			Title:      item.Title,
-			DocType:    item.DocType,
-			Format:     blob.Format,
-			SourcePath: item.SourcePath,
-			ObjectKey:  key,
-			SizeBytes:  int64(len(blob.Data)),
+			UserID:          job.UserID,
+			Provider:        acct.Provider,
+			ExternalID:      item.ExternalID,
+			Title:           item.Title,
+			DocType:         item.DocType,
+			Format:          blob.Format,
+			SourcePath:      item.SourcePath,
+			ObjectKey:       key,
+			SizeBytes:       int64(len(blob.Data)),
+			OwnerExternalID: item.OwnerID,
 		}
 		if err := e.repo.UpsertDocument(ctx, doc); err != nil {
 			return fmt.Errorf("record document: %w", err)

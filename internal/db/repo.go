@@ -240,22 +240,30 @@ func (r *Repo) HasActiveJob(ctx context.Context, userID string) (bool, error) {
 func (r *Repo) UpsertDocument(ctx context.Context, d *models.Document) error {
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO documents
-		   (user_id, provider, external_id, title, doc_type, format, source_path, object_key, size_bytes, synced_at)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now())
+		   (user_id, provider, external_id, title, doc_type, format, source_path, object_key, size_bytes, owner_external_id, synced_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
 		 ON CONFLICT (user_id, provider, external_id) DO UPDATE SET
 		   title=EXCLUDED.title, doc_type=EXCLUDED.doc_type, format=EXCLUDED.format,
 		   source_path=EXCLUDED.source_path, object_key=EXCLUDED.object_key,
-		   size_bytes=EXCLUDED.size_bytes, synced_at=now()`,
+		   size_bytes=EXCLUDED.size_bytes, owner_external_id=EXCLUDED.owner_external_id, synced_at=now()`,
 		d.UserID, d.Provider, d.ExternalID, d.Title, d.DocType, d.Format,
-		d.SourcePath, d.ObjectKey, d.SizeBytes)
+		d.SourcePath, d.ObjectKey, d.SizeBytes, d.OwnerExternalID)
 	return err
 }
 
+const docCols = `SELECT id, user_id, provider, external_id, title, doc_type, format,
+	source_path, object_key, size_bytes, owner_external_id, source_deleted_at, synced_at FROM documents`
+
+func scanDocument(row pgx.Row) (*models.Document, error) {
+	d := &models.Document{}
+	err := row.Scan(&d.ID, &d.UserID, &d.Provider, &d.ExternalID, &d.Title, &d.DocType,
+		&d.Format, &d.SourcePath, &d.ObjectKey, &d.SizeBytes, &d.OwnerExternalID,
+		&d.SourceDeletedAt, &d.SyncedAt)
+	return d, err
+}
+
 func (r *Repo) ListDocuments(ctx context.Context, userID string) ([]models.Document, error) {
-	rows, err := r.pool.Query(ctx,
-		`SELECT id, user_id, provider, external_id, title, doc_type, format,
-		        source_path, object_key, size_bytes, synced_at
-		   FROM documents WHERE user_id=$1 ORDER BY synced_at DESC`, userID)
+	rows, err := r.pool.Query(ctx, docCols+` WHERE user_id=$1 ORDER BY synced_at DESC`, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -263,27 +271,46 @@ func (r *Repo) ListDocuments(ctx context.Context, userID string) ([]models.Docum
 
 	var out []models.Document
 	for rows.Next() {
-		var d models.Document
-		if err := rows.Scan(&d.ID, &d.UserID, &d.Provider, &d.ExternalID, &d.Title,
-			&d.DocType, &d.Format, &d.SourcePath, &d.ObjectKey, &d.SizeBytes, &d.SyncedAt); err != nil {
+		d, err := scanDocument(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, d)
+		out = append(out, *d)
 	}
 	return out, rows.Err()
 }
 
 // GetDocument fetches a single document scoped to the owning user.
 func (r *Repo) GetDocument(ctx context.Context, userID, id string) (*models.Document, error) {
-	d := &models.Document{}
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, user_id, provider, external_id, title, doc_type, format,
-		        source_path, object_key, size_bytes, synced_at
-		   FROM documents WHERE id=$1 AND user_id=$2`, id, userID,
-	).Scan(&d.ID, &d.UserID, &d.Provider, &d.ExternalID, &d.Title, &d.DocType,
-		&d.Format, &d.SourcePath, &d.ObjectKey, &d.SizeBytes, &d.SyncedAt)
+	d, err := scanDocument(r.pool.QueryRow(ctx, docCols+` WHERE id=$1 AND user_id=$2`, id, userID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
 	return d, err
+}
+
+// GetDocumentsByIDs returns the user's documents for the given ids (scoped to the user).
+func (r *Repo) GetDocumentsByIDs(ctx context.Context, userID string, ids []string) ([]models.Document, error) {
+	rows, err := r.pool.Query(ctx, docCols+` WHERE user_id=$1 AND id = ANY($2)`, userID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []models.Document
+	for rows.Next() {
+		d, err := scanDocument(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *d)
+	}
+	return out, rows.Err()
+}
+
+// MarkSourceDeleted records that a document's cloud original has been deleted.
+func (r *Repo) MarkSourceDeleted(ctx context.Context, userID, id string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE documents SET source_deleted_at=now() WHERE id=$1 AND user_id=$2`, id, userID)
+	return err
 }

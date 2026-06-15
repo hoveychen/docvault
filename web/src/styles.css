@@ -89,3 +89,13 @@ h2 { margin: 0 0 6px; font-size: 17px; }
   font-size: 12px;
   text-transform: uppercase;
 }
+.tag.deleted { background: #fdecec; color: var(--error); text-transform: none; }
+
+.btn.danger { background: #fff; color: var(--error); border-color: #f0c2c2; }
+.btn.danger:hover:not(:disabled) { background: var(--error); color: #fff; border-color: var(--error); }
+
+.docs th.chk, .docs td.chk { width: 36px; text-align: center; padding-right: 0; }
+.docs input[type="checkbox"] { cursor: pointer; }
+.docs input[type="checkbox"]:disabled { cursor: not-allowed; }
+
+.small-note { font-size: 13px; margin: 4px 0 0; }

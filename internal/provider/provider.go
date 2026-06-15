@@ -37,6 +37,7 @@ type Item struct {
 	Title      string
 	DocType    string // docx, doc, sheet, bitable, slides, file, ...
 	SourcePath string // human-readable folder path
+	OwnerID    string // provider id of the owner (for delete-permission gating); empty if unknown
 }
 
 // Blob is exported bytes ready to store.
@@ -62,6 +63,9 @@ type Provider interface {
 	List(ctx context.Context, tok *Token) ([]Item, error)
 	// Export downloads/exports a single item to portable bytes.
 	Export(ctx context.Context, tok *Token, item Item) (*Blob, error)
+	// Delete removes the cloud original (moved to the provider's trash where
+	// supported). Callers must enforce ownership/archival guards first.
+	Delete(ctx context.Context, tok *Token, item Item) error
 }
 
 // Registry holds the configured providers by key.
