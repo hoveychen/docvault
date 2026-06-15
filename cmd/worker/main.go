@@ -33,6 +33,11 @@ func main() {
 	defer a.Close()
 
 	engine := syncpkg.NewEngine(a.Repo, a.Tokens, a.Registry, a.Store, log)
+
+	// Optional scheduled sync: enqueues due accounts in the background.
+	scheduler := syncpkg.NewScheduler(a.Repo, cfg.SyncInterval, log)
+	go scheduler.Start(ctx)
+
 	worker := syncpkg.NewWorker(a.Repo, engine, log)
 	worker.Start(ctx)
 }

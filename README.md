@@ -114,6 +114,14 @@ needed. Just register the exact `http://localhost:8080/...` callback and set
   the source of truth and you manage orgs in the admin UI. Remember to register each connection's
   redirect URL (`<PUBLIC_URL>/api/auth/<key>/callback`) in that org's app console.
 
+## Scheduled sync
+
+By default sync is **on-demand** (the "Sync now" button enqueues one job). Set
+`DOCVAULT_SYNC_INTERVAL` (a Go duration, e.g. `6h`) to enable **continuous** sync:
+the worker then auto-enqueues a job for every linked account whose last successful
+sync is older than the interval (skipping accounts with an in-flight job and
+banned users). Leave it empty/`0` to keep sync on-demand only.
+
 ## Deploy
 
 One image, one compose file — see [docs/deploy.md](docs/deploy.md):
