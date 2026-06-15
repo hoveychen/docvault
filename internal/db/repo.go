@@ -674,8 +674,10 @@ func (r *Repo) MarkFolderTreeSourceDeleted(ctx context.Context, userID string, f
 // --- connections (admin-managed provider configs) ---
 
 // ConnectionConfig carries a connection plus its encrypted secret, for building
-// providers in the app layer (which holds the cipher).
+// providers in the app layer (which holds the cipher). Type selects which
+// provider factory builds it (feishu, google, microsoft, tencent).
 type ConnectionConfig struct {
+	Type         string
 	Key          string
 	Label        string
 	AppID        string
@@ -686,7 +688,7 @@ type ConnectionConfig struct {
 // ListConnectionConfigs returns every connection with its encrypted secret.
 func (r *Repo) ListConnectionConfigs(ctx context.Context) ([]ConnectionConfig, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT key, label, app_id, domain, app_secret_enc FROM feishu_connections ORDER BY created_at`)
+		`SELECT provider_type, key, label, app_id, domain, app_secret_enc FROM provider_connections ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -694,7 +696,7 @@ func (r *Repo) ListConnectionConfigs(ctx context.Context) ([]ConnectionConfig, e
 	var out []ConnectionConfig
 	for rows.Next() {
 		var c ConnectionConfig
-		if err := rows.Scan(&c.Key, &c.Label, &c.AppID, &c.Domain, &c.AppSecretEnc); err != nil {
+		if err := rows.Scan(&c.Type, &c.Key, &c.Label, &c.AppID, &c.Domain, &c.AppSecretEnc); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -705,8 +707,8 @@ func (r *Repo) ListConnectionConfigs(ctx context.Context) ([]ConnectionConfig, e
 // ListConnections returns connections for the admin UI (no secrets).
 func (r *Repo) ListConnections(ctx context.Context) ([]models.Connection, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, key, label, app_id, domain, app_secret_enc <> '', created_at, updated_at
-		   FROM feishu_connections ORDER BY created_at`)
+		`SELECT id, provider_type, key, label, app_id, domain, app_secret_enc <> '', created_at, updated_at
+		   FROM provider_connections ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -714,7 +716,7 @@ func (r *Repo) ListConnections(ctx context.Context) ([]models.Connection, error)
 	var out []models.Connection
 	for rows.Next() {
 		var c models.Connection
-		if err := rows.Scan(&c.ID, &c.Key, &c.Label, &c.AppID, &c.Domain, &c.HasSecret,
+		if err := rows.Scan(&c.ID, &c.Type, &c.Key, &c.Label, &c.AppID, &c.Domain, &c.HasSecret,
 			&c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
@@ -725,30 +727,33 @@ func (r *Repo) ListConnections(ctx context.Context) ([]models.Connection, error)
 
 func (r *Repo) CountConnections(ctx context.Context) (int, error) {
 	var n int
-	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM feishu_connections`).Scan(&n)
+	err := r.pool.QueryRow(ctx, `SELECT count(*) FROM provider_connections`).Scan(&n)
 	return n, err
 }
 
 // CreateConnection inserts a new connection (secret already encrypted).
-func (r *Repo) CreateConnection(ctx context.Context, key, label, appID, domain, secretEnc string) error {
+func (r *Repo) CreateConnection(ctx context.Context, providerType, key, label, appID, domain, secretEnc string) error {
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO feishu_connections(key, label, app_id, app_secret_enc, domain)
-		 VALUES($1,$2,$3,$4,$5)`,
-		key, label, appID, secretEnc, domain)
+		`INSERT INTO provider_connections(provider_type, key, label, app_id, app_secret_enc, domain)
+		 VALUES($1,$2,$3,$4,$5,$6)`,
+		providerType, key, label, appID, secretEnc, domain)
 	return err
 }
 
-// UpdateConnection updates a connection by id. A nil secretEnc keeps the existing secret.
+// UpdateConnection updates a connection by id. A nil secretEnc keeps the existing
+// secret. The provider_type is immutable after creation (changing it would orphan
+// every account/document already linked under the connection's key), so it is not
+// updatable here.
 func (r *Repo) UpdateConnection(ctx context.Context, id, label, appID, domain string, secretEnc *string) error {
 	var ct interface{ RowsAffected() int64 }
 	var err error
 	if secretEnc != nil {
 		ct, err = r.pool.Exec(ctx,
-			`UPDATE feishu_connections SET label=$1, app_id=$2, domain=$3, app_secret_enc=$4, updated_at=now() WHERE id=$5`,
+			`UPDATE provider_connections SET label=$1, app_id=$2, domain=$3, app_secret_enc=$4, updated_at=now() WHERE id=$5`,
 			label, appID, domain, *secretEnc, id)
 	} else {
 		ct, err = r.pool.Exec(ctx,
-			`UPDATE feishu_connections SET label=$1, app_id=$2, domain=$3, updated_at=now() WHERE id=$4`,
+			`UPDATE provider_connections SET label=$1, app_id=$2, domain=$3, updated_at=now() WHERE id=$4`,
 			label, appID, domain, id)
 	}
 	if err == nil && ct.RowsAffected() == 0 {
@@ -758,7 +763,7 @@ func (r *Repo) UpdateConnection(ctx context.Context, id, label, appID, domain st
 }
 
 func (r *Repo) DeleteConnection(ctx context.Context, id string) error {
-	ct, err := r.pool.Exec(ctx, `DELETE FROM feishu_connections WHERE id=$1`, id)
+	ct, err := r.pool.Exec(ctx, `DELETE FROM provider_connections WHERE id=$1`, id)
 	if err == nil && ct.RowsAffected() == 0 {
 		return ErrNotFound
 	}

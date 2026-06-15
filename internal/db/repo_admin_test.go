@@ -25,7 +25,7 @@ func testRepo(t *testing.T) (*Repo, context.Context) {
 		t.Fatalf("migrate: %v", err)
 	}
 	// Clean slate.
-	if _, err := pool.Exec(ctx, `TRUNCATE users, provider_accounts, documents, folders, sync_jobs, feishu_connections RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE users, provider_accounts, documents, folders, sync_jobs, provider_connections RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	return NewRepo(pool), ctx
@@ -88,14 +88,14 @@ func TestBanAndRoleAndAdminCount(t *testing.T) {
 
 func TestConnectionCRUD(t *testing.T) {
 	r, ctx := testRepo(t)
-	if err := r.CreateConnection(ctx, "acme", "Acme", "cli_a", "lark", "enc-secret"); err != nil {
+	if err := r.CreateConnection(ctx, "feishu", "acme", "Acme", "cli_a", "lark", "enc-secret"); err != nil {
 		t.Fatal(err)
 	}
 	conns, err := r.ListConnections(ctx)
 	if err != nil || len(conns) != 1 {
 		t.Fatalf("list: %v len=%d", err, len(conns))
 	}
-	if !conns[0].HasSecret || conns[0].Key != "acme" {
+	if !conns[0].HasSecret || conns[0].Key != "acme" || conns[0].Type != "feishu" {
 		t.Errorf("bad conn: %+v", conns[0])
 	}
 	cfgs, _ := r.ListConnectionConfigs(ctx)

@@ -72,7 +72,7 @@ func testTokenManager(t *testing.T, prov provider.Provider) (*TokenManager, *db.
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE users, provider_accounts, documents, folders, sync_jobs, sync_job_items, feishu_connections RESTART IDENTITY CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE users, provider_accounts, documents, folders, sync_jobs, sync_job_items, provider_connections RESTART IDENTITY CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 	repo := db.NewRepo(pool)

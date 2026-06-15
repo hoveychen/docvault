@@ -88,10 +88,20 @@ function Members({ meId }: { meId: string }) {
   );
 }
 
-const EMPTY: ConnectionInput = { key: "", label: "", app_id: "", app_secret: "", domain: "feishu" };
+const EMPTY: ConnectionInput = { provider_type: "feishu", key: "", label: "", app_id: "", app_secret: "", domain: "feishu" };
+
+// Human-readable names for the provider implementation types the backend exposes.
+const TYPE_LABELS: Record<string, string> = {
+  feishu: "飞书 / Lark",
+  google: "Google Workspace",
+  microsoft: "Office 365",
+  tencent: "腾讯文档",
+};
+const typeLabel = (t: string) => TYPE_LABELS[t] || t;
 
 function Connections() {
   const [conns, setConns] = useState<Connection[]>([]);
+  const [types, setTypes] = useState<string[]>(["feishu"]);
   const [editing, setEditing] = useState<string | null>(null); // connection id, "new", or null
   const [form, setForm] = useState<ConnectionInput>(EMPTY);
   const [err, setErr] = useState("");
@@ -100,13 +110,16 @@ function Connections() {
     api.adminConnections().then((r) => setConns(r.connections || [])).catch((e) => setErr(String(e)));
   }, []);
   useEffect(load, [load]);
+  useEffect(() => {
+    api.adminProviderTypes().then((r) => { if (r.types?.length) setTypes(r.types); }).catch(() => {});
+  }, []);
 
   const startNew = () => {
     setForm(EMPTY);
     setEditing("new");
   };
   const startEdit = (c: Connection) => {
-    setForm({ key: c.key, label: c.label, app_id: c.app_id, app_secret: "", domain: c.domain });
+    setForm({ provider_type: c.provider_type, key: c.key, label: c.label, app_id: c.app_id, app_secret: "", domain: c.domain });
     setEditing(c.id);
   };
 
@@ -142,8 +155,8 @@ function Connections() {
         </Button>
       </div>
       <p className="panel-section__desc">
-        每个连接对应一个飞书 / Lark 自建应用。记得在该组织应用后台注册重定向 URL
-        &lt;PUBLIC_URL&gt;/api/auth/&lt;key&gt;/callback。
+        每个连接对应一个云文档厂商的自建应用（飞书 / Google Workspace / Office 365 / 腾讯文档）。
+        记得在该厂商的应用后台注册重定向 URL &lt;PUBLIC_URL&gt;/api/auth/&lt;key&gt;/callback。
       </p>
       {err && <p className="error-text" style={{ fontSize: 13, marginBottom: 10 }}>{err}</p>}
       <div className="data-card">
@@ -160,7 +173,9 @@ function Connections() {
                 </span>
               </div>
               <div className="data-row__sub mono">
-                {c.app_id} · {c.domain} · {c.has_secret ? "密钥已设置" : "密钥缺失"}
+                {typeLabel(c.provider_type)} · {c.app_id}
+                {c.provider_type === "feishu" ? ` · ${c.domain}` : ""} ·{" "}
+                {c.has_secret ? "密钥已设置" : "密钥缺失"}
               </div>
             </div>
             {!c.has_secret && <Badge tone="danger">密钥缺失</Badge>}
@@ -175,6 +190,24 @@ function Connections() {
       {editing && (
         <div className="form-card">
           <h4>{editing === "new" ? "新增连接" : "编辑连接"}</h4>
+          {editing === "new" && (
+            <Field label="厂商类型">
+              <select
+                className="input-wrap"
+                style={{ height: 32 }}
+                value={form.provider_type}
+                onChange={(e) => {
+                  const t = e.target.value;
+                  // domain only applies to feishu; reset it when switching type.
+                  setForm({ ...form, provider_type: t, domain: t === "feishu" ? "feishu" : "" });
+                }}
+              >
+                {types.map((t) => (
+                  <option key={t} value={t}>{typeLabel(t)}</option>
+                ))}
+              </select>
+            </Field>
+          )}
           {editing === "new" && (
             <Field label="Key（唯一，用于 OAuth 路由 /api/auth/<key>/callback）">
               <Input
@@ -209,17 +242,29 @@ function Connections() {
               onChange={(e) => setForm({ ...form, app_secret: e.target.value })}
             />
           </Field>
-          <Field label="域">
-            <select
-              className="input-wrap"
-              style={{ height: 32 }}
-              value={form.domain}
-              onChange={(e) => setForm({ ...form, domain: e.target.value })}
-            >
-              <option value="feishu">飞书 (open.feishu.cn)</option>
-              <option value="lark">Lark (open.larksuite.com)</option>
-            </select>
-          </Field>
+          {form.provider_type === "feishu" && (
+            <Field label="域">
+              <select
+                className="input-wrap"
+                style={{ height: 32 }}
+                value={form.domain}
+                onChange={(e) => setForm({ ...form, domain: e.target.value })}
+              >
+                <option value="feishu">飞书 (open.feishu.cn)</option>
+                <option value="lark">Lark (open.larksuite.com)</option>
+              </select>
+            </Field>
+          )}
+          {form.provider_type === "microsoft" && (
+            <Field label="Entra 租户（common / organizations / 租户 ID）">
+              <Input
+                block
+                value={form.domain}
+                onChange={(e) => setForm({ ...form, domain: e.target.value })}
+                placeholder="common"
+              />
+            </Field>
+          )}
           <div className="form-actions">
             <Button variant="primary" size="sm" onClick={save}>保存</Button>
             <Button variant="ghost" size="sm" onClick={() => setEditing(null)}>取消</Button>

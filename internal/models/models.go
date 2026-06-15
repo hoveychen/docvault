@@ -24,10 +24,12 @@ type User struct {
 // IsAdmin reports whether the user has the admin role.
 func (u *User) IsAdmin() bool { return u.Role == RoleAdmin }
 
-// Connection is a DB-stored Feishu/Lark org connection, editable by admins. The
+// Connection is a DB-stored provider org connection, editable by admins. Type
+// selects the provider implementation (feishu, google, microsoft, tencent). The
 // app secret is never serialized to clients (HasSecret signals whether one is set).
 type Connection struct {
 	ID        string    `json:"id"`
+	Type      string    `json:"provider_type"`
 	Key       string    `json:"key"`
 	Label     string    `json:"label"`
 	AppID     string    `json:"app_id"`

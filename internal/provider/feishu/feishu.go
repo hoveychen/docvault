@@ -62,6 +62,20 @@ type Provider struct {
 	limiter *rate.Limiter
 }
 
+// register the feishu factory so provider.Build(ConnDef{Type:"feishu", …}) works
+// once this package is imported for its side effects (see internal/app).
+func init() {
+	provider.RegisterFactory("feishu", func(def provider.ConnDef) (provider.Provider, error) {
+		return New(config.FeishuConnection{
+			Key:       def.Key,
+			Label:     def.Label,
+			AppID:     def.AppID,
+			AppSecret: def.AppSecret,
+			Domain:    def.Domain,
+		}), nil
+	})
+}
+
 // New builds a provider for one org connection.
 func New(conn config.FeishuConnection) *Provider {
 	baseURL := lark.FeishuBaseUrl

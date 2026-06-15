@@ -12,6 +12,7 @@ export interface User {
 
 export interface Connection {
   id: string;
+  provider_type: string;
   key: string;
   label: string;
   app_id: string;
@@ -20,6 +21,7 @@ export interface Connection {
 }
 
 export interface ConnectionInput {
+  provider_type?: string;
   key?: string;
   label: string;
   app_id: string;
@@ -124,6 +126,7 @@ export const api = {
   adminUsers: () => req<{ users: User[] }>("/api/admin/users"),
   adminUserAction: (id: string, action: "promote" | "demote" | "ban" | "unban") =>
     req<{ status: string }>(`/api/admin/users/${id}/${action}`, { method: "POST" }),
+  adminProviderTypes: () => req<{ types: string[] }>("/api/admin/provider-types"),
   adminConnections: () => req<{ connections: Connection[] }>("/api/admin/connections"),
   adminCreateConnection: (c: ConnectionInput) =>
     req<{ status: string }>("/api/admin/connections", {

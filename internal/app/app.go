@@ -12,7 +12,9 @@ import (
 	"github.com/hoveychen/docvault/internal/crypto"
 	"github.com/hoveychen/docvault/internal/db"
 	"github.com/hoveychen/docvault/internal/provider"
-	"github.com/hoveychen/docvault/internal/provider/feishu"
+	// provider implementations register their factories via init(); blank-import
+	// each one so provider.Build can construct it by type.
+	_ "github.com/hoveychen/docvault/internal/provider/feishu"
 	"github.com/hoveychen/docvault/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -89,7 +91,7 @@ func Build(ctx context.Context, cfg *config.Config, log *slog.Logger) (*App, err
 // time (when the table is empty), so existing deployments migrate seamlessly and
 // admins can thereafter manage connections from the web UI.
 func (a *App) seedConnectionsFromEnv(ctx context.Context) error {
-	if len(a.Config.FeishuConnections) == 0 {
+	if len(a.Config.Connections) == 0 {
 		return nil
 	}
 	n, err := a.Repo.CountConnections(ctx)
@@ -99,15 +101,15 @@ func (a *App) seedConnectionsFromEnv(ctx context.Context) error {
 	if n > 0 {
 		return nil
 	}
-	for _, conn := range a.Config.FeishuConnections {
+	for _, conn := range a.Config.Connections {
 		secretEnc, err := a.Cipher.Encrypt(conn.AppSecret)
 		if err != nil {
 			return err
 		}
-		if err := a.Repo.CreateConnection(ctx, conn.Key, conn.Label, conn.AppID, conn.Domain, secretEnc); err != nil {
+		if err := a.Repo.CreateConnection(ctx, conn.Type, conn.Key, conn.Label, conn.AppID, conn.Domain, secretEnc); err != nil {
 			return err
 		}
-		a.Log.Info("seeded connection from env", "key", conn.Key)
+		a.Log.Info("seeded connection from env", "key", conn.Key, "type", conn.Type)
 	}
 	return nil
 }
@@ -126,9 +128,14 @@ func (a *App) ReloadProviders(ctx context.Context) error {
 			a.Log.Error("decrypt connection secret failed", "key", c.Key, "err", err)
 			continue
 		}
-		provs = append(provs, feishu.New(config.FeishuConnection{
-			Key: c.Key, Label: c.Label, AppID: c.AppID, AppSecret: secret, Domain: c.Domain,
-		}))
+		prov, err := provider.Build(provider.ConnDef{
+			Type: c.Type, Key: c.Key, Label: c.Label, AppID: c.AppID, AppSecret: secret, Domain: c.Domain,
+		})
+		if err != nil {
+			a.Log.Error("build provider failed", "key", c.Key, "type", c.Type, "err", err)
+			continue
+		}
+		provs = append(provs, prov)
 	}
 	a.Registry.Replace(provs)
 	a.Log.Info("providers loaded", "count", len(provs))
