@@ -15,6 +15,7 @@ import (
 	// provider implementations register their factories via init(); blank-import
 	// each one so provider.Build can construct it by type.
 	_ "github.com/hoveychen/docvault/internal/provider/feishu"
+	_ "github.com/hoveychen/docvault/internal/provider/microsoft"
 	"github.com/hoveychen/docvault/internal/store"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
