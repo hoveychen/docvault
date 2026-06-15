@@ -6,7 +6,6 @@ import {
   ChevronRight,
   Cloud,
   Clock,
-  Eye,
   Files,
   Folder,
   FolderOpen,
@@ -24,7 +23,6 @@ import { useVault } from "../lib/vault";
 import { crumbs, normalizePath } from "../lib/tree";
 import { browseUrl } from "../lib/routes";
 import { fileVisual } from "../lib/fileType";
-import { canPreview } from "../lib/preview";
 import { formatRelative, formatSize } from "../lib/format";
 import type { TreeFolder } from "../lib/tree";
 import { Badge, Button, IconButton, Input, Skeleton, Spinner, Tooltip } from "./ui";
@@ -516,11 +514,15 @@ function DocRow({
   const v = fileVisual(doc);
   const deleted = !!doc.source_deleted_at;
   const archived = doc.object_key !== "";
-  const previewable = canPreview(doc);
   return (
     <tr
-      className={"file-row" + (selected ? " is-selected" : "") + (!archived ? " is-unarchived" : "")}
-      onClick={onToggle}
+      className={
+        "file-row" +
+        (selected ? " is-selected" : "") +
+        (!archived ? " is-unarchived" : "") +
+        (archived ? " is-openable" : "")
+      }
+      onClick={archived ? () => onPreview(doc) : undefined}
     >
       <td className="col-chk" onClick={(e) => e.stopPropagation()}>
         <input
@@ -535,19 +537,7 @@ function DocRow({
       <td>
         <div className="file-row__name">
           <v.Icon color={v.color} />
-          {previewable ? (
-            <span
-              className="file-row__link"
-              onClick={(e) => {
-                e.stopPropagation();
-                onPreview(doc);
-              }}
-            >
-              {doc.title}
-            </span>
-          ) : (
-            <span>{doc.title}</span>
-          )}
+          <span>{doc.title}</span>
         </div>
       </td>
       <td>
@@ -574,9 +564,6 @@ function DocRow({
       </td>
       <td className="col-actions" onClick={(e) => e.stopPropagation()}>
         <div className="row-actions">
-          {previewable && (
-            <IconButton icon={Eye} size="sm" label="预览" onClick={() => onPreview(doc)} />
-          )}
           {archived && (
             <Tooltip label="下载">
               <a href={api.downloadUrl(doc.id)} className="icon-btn icon-btn--sm">
@@ -640,12 +627,17 @@ function GridView({
       {docs.map((d) => {
         const v = fileVisual(d);
         const selected = selDocs.has(d.id);
-        const previewable = canPreview(d);
+        const openable = d.object_key !== "";
         return (
           <div
             key={d.id}
-            className={"grid-card" + (selected ? " is-selected" : "") + (d.object_key === "" ? " is-unarchived" : "")}
-            onClick={() => onToggleDoc(d.id)}
+            className={
+              "grid-card" +
+              (selected ? " is-selected" : "") +
+              (d.object_key === "" ? " is-unarchived" : "") +
+              (openable ? " is-openable" : "")
+            }
+            onClick={openable ? () => onPreview(d) : undefined}
           >
             {d.deletable && (
               <input
@@ -655,19 +647,6 @@ function GridView({
                 onChange={() => onToggleDoc(d.id)}
                 onClick={(e) => e.stopPropagation()}
               />
-            )}
-            {previewable && (
-              <button
-                className="grid-card__preview"
-                aria-label="预览"
-                title="预览"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onPreview(d);
-                }}
-              >
-                <Eye />
-              </button>
             )}
             <div className="grid-card__icon">
               <v.Icon color={v.color} />
