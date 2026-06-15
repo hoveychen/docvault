@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -176,8 +177,11 @@ func (p *Provider) walk(ctx context.Context, accessToken, folderToken, pathPrefi
 					OwnerID:    strDeref(f.OwnerId),
 					IsFolder:   true,
 				})
+				// A failure inside one sub-folder shouldn't abort the whole sync —
+				// log and skip it (the root list error above stays fatal so auth/token
+				// problems still surface loudly).
 				if err := p.walk(ctx, accessToken, token, child, out); err != nil {
-					return err
+					slog.Default().Warn("skip drive folder", "path", child, "err", err)
 				}
 				continue
 			}
@@ -201,6 +205,11 @@ func (p *Provider) walk(ctx context.Context, accessToken, folderToken, pathPrefi
 // listWiki enumerates every wiki space the user can see and recurses each
 // space's node tree, appending each node's underlying object as an Item keyed
 // by its obj_token / obj_type (so Export handles it like any drive doc).
+//
+// Wiki is best-effort: a failure listing spaces, or listing nodes within one
+// space (Lark sometimes returns rpc errors for spaces the user can see but not
+// fully enumerate), is logged and skipped rather than aborting the whole sync —
+// otherwise one bad wiki space would lose the entire drive archive.
 func (p *Provider) listWiki(ctx context.Context, accessToken string, out *[]provider.Item) error {
 	opt := larkcore.WithUserAccessToken(accessToken)
 	pageToken := ""
@@ -211,15 +220,18 @@ func (p *Provider) listWiki(ctx context.Context, accessToken string, out *[]prov
 		}
 		resp, err := p.client.Wiki.Space.List(ctx, b.Build(), opt)
 		if err != nil {
-			return fmt.Errorf("list wiki spaces: %w", err)
+			slog.Default().Warn("skip wiki: list spaces failed", "err", err)
+			return nil
 		}
 		if !resp.Success() {
-			return fmt.Errorf("list wiki spaces: code=%d msg=%s", resp.Code, resp.Msg)
+			slog.Default().Warn("skip wiki: list spaces failed", "code", resp.Code, "msg", resp.Msg)
+			return nil
 		}
 		for _, sp := range resp.Data.Items {
 			spaceName := strDeref(sp.Name)
 			if err := p.walkWikiNodes(ctx, opt, strDeref(sp.SpaceId), "", joinPath("Wiki", spaceName), out); err != nil {
-				return err
+				slog.Default().Warn("skip wiki space", "space", strDeref(sp.SpaceId), "name", spaceName, "err", err)
+				continue
 			}
 		}
 		if resp.Data.HasMore != nil && *resp.Data.HasMore && resp.Data.PageToken != nil {
