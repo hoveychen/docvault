@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/url"
 	"time"
 
@@ -46,6 +47,22 @@ func (s *Store) Put(ctx context.Context, key string, data []byte, contentType st
 	_, err := s.client.PutObject(ctx, s.bucket, key, bytes.NewReader(data), int64(len(data)),
 		minio.PutObjectOptions{ContentType: contentType})
 	return err
+}
+
+// Open returns a reader over the object plus its content type and size. The
+// caller must Close the reader. Used to stream downloads through the server
+// (single-origin deployments where object storage isn't publicly reachable).
+func (s *Store) Open(ctx context.Context, key string) (io.ReadCloser, string, int64, error) {
+	obj, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, "", 0, err
+	}
+	info, err := obj.Stat()
+	if err != nil {
+		_ = obj.Close()
+		return nil, "", 0, err
+	}
+	return obj, info.ContentType, info.Size, nil
 }
 
 // PresignDownload returns a short-lived URL that downloads the object as filename.
