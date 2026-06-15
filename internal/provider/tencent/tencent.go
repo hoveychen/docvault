@@ -1,16 +1,12 @@
 // Package tencent implements provider.Provider for Tencent Docs (腾讯文档,
-// docs.qq.com/open) using the documented OAuth2 + REST endpoints. No official
-// Go SDK exists, so every call is raw net/http.
+// docs.qq.com/open) using the documented OAuth2 + OpenAPI REST endpoints. No
+// official Go SDK exists, so every call is raw net/http.
 //
-// HONESTY NOTE: Tencent Docs' open platform is sparsely documented in English.
-// The OAuth2 authorize/token endpoints below are taken from the public docs
-// (docs.qq.com/oauth/v2/...). The drive/file-list, export-task, and delete
-// endpoints — plus several JSON field names and request headers — could not be
-// fully verified against docs.qq.com/open. Every such guess is marked with an
-// `// ASSUMPTION:` comment and listed in the implementer's report. The uncertain
-// surface is deliberately isolated in small helpers (apiBase paths, the response
-// structs, headerClientID) so it is cheap to correct once the real shapes are
-// confirmed.
+// Endpoints and field names below are taken from the official open-platform docs
+// (https://docs.qq.com/open/document/app/...). Where a runtime detail can only be
+// confirmed with live credentials (e.g. the exact OOXML container an export
+// produces), that is called out with an `// UNVERIFIED:` note rather than left as
+// an ungrounded guess.
 package tencent
 
 import (
@@ -22,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -30,42 +27,41 @@ import (
 )
 
 const (
-	// OAuth endpoints — these two are the documented public endpoints.
+	// OAuth endpoints (docs.qq.com/open/document/app/oauth2/*). Both authorize and
+	// token are GET requests.
 	oauthAuthorizeURL = "https://docs.qq.com/oauth/v2/authorize"
 	oauthTokenURL     = "https://docs.qq.com/oauth/v2/token"
+	oauthUserInfoURL  = "https://docs.qq.com/oauth/v2/userinfo"
 
-	// ASSUMPTION: REST API base. The OpenAPI host is docs.qq.com/openapi; the
-	// concrete path segments below (drive/v2/files, export, delete) are inferred
-	// from REST conventions and Feishu's analogous shape, NOT verified.
+	// OpenAPI REST base (docs.qq.com/open/document/app/openapi/v2/*).
 	apiBase = "https://docs.qq.com/openapi"
 
 	apiRatePerSec = 5 // conservative steady-state request rate
 	apiBurst      = 5
 	maxAPIRetries = 6
 
-	// ASSUMPTION: Tencent's HTTP status for rate limiting is the standard 429.
-	// Some Chinese cloud APIs also carry a JSON ret/code field; we additionally
-	// treat a non-zero `ret` equal to this sentinel as a rate-limit signal.
-	// The exact business code is unknown, so only HTTP 429 actually triggers
-	// backoff today; codeRateLimited is a placeholder for future correction.
-	codeRateLimited = -1
+	// Tencent throttles with the standard HTTP 429; we back off and retry on it.
+	codeRateLimited = -429
+
+	// Page size for the folder-listing endpoint (`limit` query param).
+	listLimit = 100
 )
 
-// exportable maps a Tencent Docs doc type to the export file extension we
-// request. Tencent's online document is a Word-like doc; its spreadsheet is an
-// Excel-like sheet; the slide is a PPT. Per-item export failures are non-fatal
-// (the engine logs and skips them), so listing best-effort types here is safe.
+// exportSpec maps a Tencent Docs doc type to the export-task `exportType` we
+// request and the file extension we store. Per the async-export docs the source
+// types are doc / sheet / slide / pdf / smartcanvas. Per-item export failures are
+// non-fatal (the engine logs and skips them).
 //
-// ASSUMPTION: the doc-type strings ("doc", "sheet", "slide", "pdf", "mind") are
-// the values Tencent returns in a file's `type` field. These are inferred; the
-// real enumeration must be confirmed against docs.qq.com/open.
-var exportable = map[string]string{
-	"doc":   "docx",
-	"docx":  "docx",
-	"sheet": "xlsx",
-	"slide": "pptx",
-	"pptx":  "pptx",
-	"pdf":   "pdf",
+// UNVERIFIED: the exact container produced by exportType "doc"/"sheet"/"slide"
+// (i.e. whether "doc" yields .docx and "sheet" yields .xlsx) needs a live export
+// to confirm; we assume the modern OOXML containers, which is the useful archive
+// format. "pdf" is unambiguous.
+var exportSpec = map[string]struct{ exportType, ext string }{
+	"doc":         {"doc", "docx"},
+	"sheet":       {"sheet", "xlsx"},
+	"slide":       {"slide", "pptx"},
+	"pdf":         {"pdf", "pdf"},
+	"smartcanvas": {"doc", "docx"},
 }
 
 var contentTypes = map[string]string{
@@ -83,6 +79,13 @@ type Provider struct {
 	appSecret string // OAuth client_secret (Tencent "AppSecret")
 	http      *http.Client
 	limiter   *rate.Limiter
+
+	// openIDs caches access-token → the authorizing user's openID, which every
+	// authenticated OpenAPI call must send in the Open-Id header. It is resolved
+	// lazily via the userinfo endpoint (which needs only the access token), so the
+	// stateless Provider interface (List/Export/Delete receive just a *Token) need
+	// not change.
+	openIDs sync.Map // map[string]string
 }
 
 // register the tencent factory so provider.Build(ConnDef{Type:"tencent", …})
@@ -93,9 +96,8 @@ func init() {
 	})
 }
 
-// New builds a provider for one Tencent Docs connection. Domain is currently
-// unused (Tencent has a single open-platform host) but accepted for parity with
-// the other providers' ConnDef.
+// New builds a provider for one Tencent Docs connection. Domain is unused (Tencent
+// has a single open-platform host) but accepted for parity with other providers.
 func New(def provider.ConnDef) *Provider {
 	label := def.Label
 	if label == "" {
@@ -114,43 +116,34 @@ func New(def provider.ConnDef) *Provider {
 func (p *Provider) Key() string   { return p.key }
 func (p *Provider) Label() string { return p.label }
 
-// AuthCodeURL builds the OAuth2 authorization redirect.
+// AuthCodeURL builds the OAuth2 authorization redirect:
 //
-//	https://docs.qq.com/oauth/v2/authorize?client_id={AppID}&redirect_uri=...
-//	    &response_type=code&scope=all&state=...
+//	GET https://docs.qq.com/oauth/v2/authorize?client_id=…&redirect_uri=…
+//	    &response_type=code&scope=all&state=…
+//
+// scope is the documented fixed value "all".
 func (p *Provider) AuthCodeURL(state, redirectURI string) string {
 	q := url.Values{}
 	q.Set("client_id", p.appID)
 	q.Set("redirect_uri", redirectURI)
 	q.Set("response_type", "code")
-	// ASSUMPTION: scope=all grants drive read + export + (trash) delete. Tencent
-	// documents a coarse "all" scope; finer scopes may exist but are unverified.
 	q.Set("scope", "all")
 	q.Set("state", state)
 	return oauthAuthorizeURL + "?" + q.Encode()
 }
 
-// tokenResponse is the documented token-endpoint payload. Tencent returns the
-// OAuth2 standard fields; the identity fields (user_id/open_id) are best-effort.
-//
-// ASSUMPTION: field names. access_token / refresh_token / expires_in are OAuth2
-// standard and safe. The identity carriers (user_id, openid, open_id) and any
-// error envelope (ret/msg/error/error_description) are inferred — Tencent may
-// name them differently. We parse several spellings to be tolerant.
+// tokenResponse is the token-endpoint payload. Per the docs it carries the OAuth2
+// standard fields plus user_id (the user's "Open ID") and a comma-separated scope.
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
-	// Tencent's refresh-token TTL field name is unverified; try a few spellings.
-	RefreshExpiresIn  int `json:"refresh_token_expires_in"`
-	RefreshExpiresAlt int `json:"refresh_expires_in"`
+	RefreshToken string `json:"refresh_token"`
+	UserID       string `json:"user_id"`
+	Scope        string `json:"scope"`
 
-	// identity (best-effort)
-	UserID  string `json:"user_id"`
-	OpenID  string `json:"openid"`
-	OpenID2 string `json:"open_id"`
-
-	// error envelopes (try both OAuth2-standard and Tencent ret/msg)
+	// Error envelope: the token endpoint may use OAuth2-standard error fields or
+	// Tencent's ret/msg. Parse both.
 	Error     string `json:"error"`
 	ErrorDesc string `json:"error_description"`
 	Ret       int    `json:"ret"`
@@ -170,40 +163,27 @@ func (t *tokenResponse) failed() (bool, string) {
 	return false, ""
 }
 
-func (t *tokenResponse) identity() *provider.Identity {
-	return &provider.Identity{
-		// ExternalUserID prefers open_id/openid (stable per-app id), then user_id.
-		// DisplayName/Email/Avatar are intentionally left empty: the token
-		// response is not documented to carry them, and there is no verified
-		// userinfo endpoint. They can be backfilled once that endpoint is known.
-		ExternalUserID: firstNonEmpty(t.OpenID, t.OpenID2, t.UserID),
-	}
-}
-
 func (t *tokenResponse) token() *provider.Token {
-	refreshTTL := t.RefreshExpiresIn
-	if refreshTTL == 0 {
-		refreshTTL = t.RefreshExpiresAlt
-	}
+	// The refresh token is documented to last one year; the token response does
+	// not carry an explicit refresh TTL, so RefreshExpiresAt is left zero (the
+	// engine refreshes on access-token expiry, which is what Expired() checks).
 	return &provider.Token{
-		AccessToken:      t.AccessToken,
-		RefreshToken:     t.RefreshToken,
-		AccessExpiresAt:  expiry(t.ExpiresIn),
-		RefreshExpiresAt: expiry(refreshTTL),
+		AccessToken:     t.AccessToken,
+		RefreshToken:    t.RefreshToken,
+		AccessExpiresAt: expiry(t.ExpiresIn),
 	}
 }
 
-// postToken performs an OAuth2 token-endpoint POST (form-encoded) and decodes
-// the JSON response. Used by both Exchange and Refresh.
-func (p *Provider) postToken(ctx context.Context, form url.Values) (*tokenResponse, error) {
+// getToken performs an OAuth2 token-endpoint GET (Tencent uses GET, not POST) and
+// decodes the JSON response. Used by both Exchange and Refresh.
+func (p *Provider) getToken(ctx context.Context, q url.Values) (*tokenResponse, error) {
 	var tr *tokenResponse
 	err := p.call(ctx, "token", func() (bool, int, string, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, oauthTokenURL,
-			strings.NewReader(form.Encode()))
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, oauthTokenURL+"?"+q.Encode(), nil)
 		if err != nil {
 			return false, 0, "", err
 		}
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Accept", "application/json")
 		resp, err := p.http.Do(req)
 		if err != nil {
 			return false, 0, "", err
@@ -233,277 +213,309 @@ func (p *Provider) postToken(ctx context.Context, form url.Values) (*tokenRespon
 }
 
 // Exchange swaps an authorization code for tokens + the authorizing user's
-// identity.
+// identity. Identity (openID/nick/avatar) comes from the userinfo endpoint.
 func (p *Provider) Exchange(ctx context.Context, code, redirectURI string) (*provider.Token, *provider.Identity, error) {
-	form := url.Values{}
-	form.Set("client_id", p.appID)
-	form.Set("client_secret", p.appSecret)
-	form.Set("grant_type", "authorization_code")
-	form.Set("code", code)
-	form.Set("redirect_uri", redirectURI)
-	tr, err := p.postToken(ctx, form)
+	q := url.Values{}
+	q.Set("client_id", p.appID)
+	q.Set("client_secret", p.appSecret)
+	q.Set("grant_type", "authorization_code")
+	q.Set("code", code)
+	q.Set("redirect_uri", redirectURI)
+	tr, err := p.getToken(ctx, q)
 	if err != nil {
 		return nil, nil, fmt.Errorf("tencent exchange: %w", err)
 	}
-	return tr.token(), tr.identity(), nil
+	tok := tr.token()
+
+	identity := &provider.Identity{ExternalUserID: tr.UserID}
+	if info, ierr := p.fetchUserInfo(ctx, tok.AccessToken); ierr == nil {
+		if info.openID() != "" {
+			identity.ExternalUserID = info.openID()
+		}
+		identity.DisplayName = info.Data.Nick
+		identity.AvatarURL = info.Data.Avatar
+		// Seed the Open-Id cache so the first List/Export need not re-fetch.
+		if info.openID() != "" {
+			p.openIDs.Store(tok.AccessToken, info.openID())
+		}
+	} else {
+		slog.Default().Warn("tencent userinfo failed at exchange", "err", ierr)
+	}
+	return tok, identity, nil
 }
 
 // Refresh obtains a fresh access token from a refresh token.
 func (p *Provider) Refresh(ctx context.Context, refreshToken string) (*provider.Token, error) {
-	form := url.Values{}
-	form.Set("client_id", p.appID)
-	form.Set("client_secret", p.appSecret)
-	form.Set("grant_type", "refresh_token")
-	form.Set("refresh_token", refreshToken)
-	tr, err := p.postToken(ctx, form)
+	q := url.Values{}
+	q.Set("client_id", p.appID)
+	q.Set("client_secret", p.appSecret)
+	q.Set("grant_type", "refresh_token")
+	q.Set("refresh_token", refreshToken)
+	tr, err := p.getToken(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("tencent refresh: %w", err)
 	}
 	return tr.token(), nil
 }
 
-// fileEntry is one element of the file-list response.
-//
-// ASSUMPTION: every field name here (id, title, type, fileType, folder, parent
-// path) is inferred. Tencent likely returns a file id and a title plus a type
-// discriminator; the exact JSON keys are unverified. We read a couple of common
-// spellings (ID/FileID, Title/Name, Type/FileType) defensively.
-type fileEntry struct {
-	ID       string `json:"id"`
-	FileID   string `json:"fileID"`
-	Title    string `json:"title"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	FileType string `json:"fileType"`
-	// ASSUMPTION: folders are flagged either by a boolean or by type=="folder".
-	IsFolder bool `json:"isFolder"`
-}
-
-func (f fileEntry) id() string    { return firstNonEmpty(f.FileID, f.ID) }
-func (f fileEntry) title() string { return firstNonEmpty(f.Title, f.Name) }
-func (f fileEntry) docType() string {
-	t := firstNonEmpty(f.Type, f.FileType)
-	if f.IsFolder || t == "folder" {
-		return "folder"
-	}
-	return t
-}
-
-// listResponse wraps the paginated file list.
-//
-// ASSUMPTION: the envelope (ret/msg, data{list,next}) is inferred. Tencent's
-// real envelope may differ (e.g. {code,message,data}). We read ret AND code,
-// and look for the list under both `list` and `files`, and the cursor under
-// `next` and `nextPageToken`.
-type listResponse struct {
-	Ret     int    `json:"ret"`
-	Code    int    `json:"code"`
-	Msg     string `json:"msg"`
-	Message string `json:"message"`
-	Data    struct {
-		List          []fileEntry `json:"list"`
-		Files         []fileEntry `json:"files"`
-		Next          string      `json:"next"`
-		NextPageToken string      `json:"nextPageToken"`
-		HasMore       bool        `json:"hasMore"`
+// userInfoResponse is the /oauth/v2/userinfo payload.
+type userInfoResponse struct {
+	Ret  int    `json:"ret"`
+	Msg  string `json:"msg"`
+	Data struct {
+		OpenID  string `json:"openID"`
+		Nick    string `json:"nick"`
+		Avatar  string `json:"avatar"`
+		UnionID string `json:"unionID"`
 	} `json:"data"`
 }
 
-func (r *listResponse) entries() []fileEntry {
-	if len(r.Data.List) > 0 {
-		return r.Data.List
-	}
-	return r.Data.Files
-}
-func (r *listResponse) next() string { return firstNonEmpty(r.Data.Next, r.Data.NextPageToken) }
-func (r *listResponse) bizCode() int {
-	if r.Ret != 0 {
-		return r.Ret
-	}
-	return r.Code
-}
-func (r *listResponse) bizMsg() string { return firstNonEmpty(r.Msg, r.Message) }
+func (u *userInfoResponse) openID() string { return u.Data.OpenID }
 
-// List enumerates the user's files via the drive file-list endpoint, paginating
-// the cursor. Folder entries are recorded (so their originals can be deleted)
-// and skipped for export; flat listing is used because the folder-tree shape is
-// unverified — see the path note below.
+// fetchUserInfo resolves the authorizing user via the access token alone. It does
+// NOT go through callAPI (which would need the Open-Id we're trying to obtain).
+func (p *Provider) fetchUserInfo(ctx context.Context, accessToken string) (*userInfoResponse, error) {
+	q := url.Values{}
+	q.Set("access_token", accessToken)
+	var info *userInfoResponse
+	err := p.call(ctx, "userinfo", func() (bool, int, string, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, oauthUserInfoURL+"?"+q.Encode(), nil)
+		if err != nil {
+			return false, 0, "", err
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err := p.http.Do(req)
+		if err != nil {
+			return false, 0, "", err
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return false, 0, "", err
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return false, codeRateLimited, "rate limited", nil
+		}
+		var parsed userInfoResponse
+		if err := json.Unmarshal(body, &parsed); err != nil {
+			return false, resp.StatusCode, string(body), fmt.Errorf("decode userinfo: %w", err)
+		}
+		if parsed.Ret != 0 || parsed.openID() == "" {
+			return false, resp.StatusCode, fmt.Sprintf("ret=%d msg=%s", parsed.Ret, parsed.Msg), nil
+		}
+		info = &parsed
+		return true, 0, "", nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
+}
+
+// resolveOpenID returns the openID for an access token, fetching+caching it via
+// userinfo on first use.
+func (p *Provider) resolveOpenID(ctx context.Context, accessToken string) (string, error) {
+	if v, ok := p.openIDs.Load(accessToken); ok {
+		return v.(string), nil
+	}
+	info, err := p.fetchUserInfo(ctx, accessToken)
+	if err != nil {
+		return "", err
+	}
+	p.openIDs.Store(accessToken, info.openID())
+	return info.openID(), nil
+}
+
+// fileEntry is one element of the folder-listing response. Per the docs each item
+// carries ID, title, type ("folder"|"doc"), url and timestamps; ownerID/isOwner
+// appear in metadata and (best-effort) in list items for delete gating.
+type fileEntry struct {
+	ID      string `json:"ID"`
+	Title   string `json:"title"`
+	Type    string `json:"type"`
+	OwnerID string `json:"ownerID"`
+}
+
+func (f fileEntry) isFolder() bool { return f.Type == "folder" }
+
+// listResponse wraps the paginated folder listing:
+//
+//	{"ret":0,"msg":"...","data":{"next":20,"list":[ … ]}}
+//
+// `next` is the offset to pass as `start` on the subsequent request.
+type listResponse struct {
+	Ret  int    `json:"ret"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Next int         `json:"next"`
+		List []fileEntry `json:"list"`
+	} `json:"data"`
+}
+
+// List walks the user's drive recursively from the root ("我的文档"), descending
+// into every folder. A failure inside one sub-folder is logged and skipped (the
+// root listing error stays fatal so auth/token problems surface loudly), mirroring
+// the feishu provider.
 func (p *Provider) List(ctx context.Context, tok *provider.Token) ([]provider.Item, error) {
 	var items []provider.Item
-	cursor := ""
+	if err := p.walk(ctx, tok.AccessToken, "", "", &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (p *Provider) walk(ctx context.Context, accessToken, folderID, pathPrefix string, out *[]provider.Item) error {
+	start := 0
 	for {
-		// ASSUMPTION: GET {apiBase}/drive/v2/files?pageSize=100&pageToken=...
-		// Path segments, query param names (pageSize/pageToken), and the bearer
-		// header are all inferred — see callAPI / headers below.
-		q := url.Values{}
-		q.Set("pageSize", "100")
-		if cursor != "" {
-			q.Set("pageToken", cursor)
-		}
-		endpoint := apiBase + "/drive/v2/files?" + q.Encode()
-
+		// GET {apiBase}/drive/v2/folders/{folderID}?start=&limit=  (empty folderID
+		// → the user's "我的文档" root).
+		endpoint := fmt.Sprintf("%s/drive/v2/folders/%s?start=%d&limit=%d",
+			apiBase, url.PathEscape(folderID), start, listLimit)
 		var resp listResponse
-		if err := p.callAPI(ctx, http.MethodGet, endpoint, tok.AccessToken, nil, &resp); err != nil {
-			return nil, err
+		if err := p.callAPI(ctx, http.MethodGet, endpoint, accessToken, nil, "", &resp); err != nil {
+			return err
 		}
-		if c := resp.bizCode(); c != 0 {
-			return nil, fmt.Errorf("list files: code=%d msg=%s", c, resp.bizMsg())
+		if resp.Ret != 0 {
+			return fmt.Errorf("list folder %q: ret=%d msg=%s", folderID, resp.Ret, resp.Msg)
 		}
 
-		for _, f := range resp.entries() {
-			id := f.id()
-			if id == "" {
+		for _, f := range resp.Data.List {
+			if f.ID == "" {
 				continue
 			}
-			dt := f.docType()
-			// ASSUMPTION: the list endpoint returns a flat set (no nested folder
-			// path). We therefore record folders without recursing and leave
-			// SourcePath empty. If Tencent exposes a folder-tree walk, mirror
-			// feishu's recursive walk() here and build joinPath() prefixes.
-			items = append(items, provider.Item{
-				ExternalID: id,
-				Title:      f.title(),
-				DocType:    dt,
-				SourcePath: "",
-				IsFolder:   dt == "folder",
+			if f.isFolder() {
+				child := joinPath(pathPrefix, f.Title)
+				*out = append(*out, provider.Item{
+					ExternalID: f.ID,
+					Title:      f.Title,
+					DocType:    "folder",
+					SourcePath: child,
+					OwnerID:    f.OwnerID,
+					IsFolder:   true,
+				})
+				if err := p.walk(ctx, accessToken, f.ID, child, out); err != nil {
+					slog.Default().Warn("skip tencent folder", "path", child, "err", err)
+				}
+				continue
+			}
+			*out = append(*out, provider.Item{
+				ExternalID: f.ID,
+				Title:      f.Title,
+				DocType:    f.Type,
+				SourcePath: pathPrefix,
+				OwnerID:    f.OwnerID,
 			})
 		}
 
-		nxt := resp.next()
-		if nxt == "" {
-			return items, nil
+		// Stop when a short page is returned or the cursor does not advance.
+		if len(resp.Data.List) < listLimit || resp.Data.Next <= start {
+			return nil
 		}
-		cursor = nxt
+		start = resp.Data.Next
 	}
 }
 
-// createExportResp is the create-export-task response.
-//
-// ASSUMPTION: operationID is the polling handle. Tencent likely returns some
-// async-task identifier; the field name is unverified (we read operationID and
-// operation_id).
+// createExportResp is the async-export-task response: data.operationID.
 type createExportResp struct {
-	Ret     int    `json:"ret"`
-	Code    int    `json:"code"`
-	Msg     string `json:"msg"`
-	Message string `json:"message"`
-	Data    struct {
-		OperationID  string `json:"operationID"`
-		OperationID2 string `json:"operation_id"`
+	Ret  int    `json:"ret"`
+	Msg  string `json:"msg"`
+	Data struct {
+		OperationID string `json:"operationID"`
 	} `json:"data"`
 }
 
-func (r *createExportResp) operationID() string {
-	return firstNonEmpty(r.Data.OperationID, r.Data.OperationID2)
-}
-
-// exportProgressResp is the poll-status response.
-//
-// ASSUMPTION: progress reaches 100 (or status=="done") on completion and a
-// downloadable URL is returned in `url`. Field names unverified.
+// exportProgressResp is the export-progress response: data.progress (0..100) and
+// data.url (a 24h signed download link, present on success).
 type exportProgressResp struct {
-	Ret     int    `json:"ret"`
-	Code    int    `json:"code"`
-	Msg     string `json:"msg"`
-	Message string `json:"message"`
-	Data    struct {
-		Progress int    `json:"progress"` // 0..100
-		Status   string `json:"status"`   // e.g. "done"/"processing"/"failed"
-		URL      string `json:"url"`      // signed download URL when complete
+	Ret  int    `json:"ret"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Progress int    `json:"progress"`
+		URL      string `json:"url"`
 	} `json:"data"`
 }
 
-// Export performs the three-step async export (create task → poll → download),
-// mirroring feishu's Export shape.
+// Export performs the documented three-step async export: create task → poll
+// progress → download the signed URL.
 func (p *Provider) Export(ctx context.Context, tok *provider.Token, item provider.Item) (*provider.Blob, error) {
-	ext, ok := exportable[item.DocType]
+	spec, ok := exportSpec[item.DocType]
 	if !ok {
 		return nil, fmt.Errorf("doc type %q is not exportable", item.DocType)
 	}
 	at := tok.AccessToken
 
-	// Step 1: create export task.
-	// ASSUMPTION: POST {apiBase}/drive/v2/files/{fileID}/export with a JSON body
-	// {"exportType": ext}. Path, method, and body key are all inferred.
-	createBody, _ := json.Marshal(map[string]string{"exportType": ext})
-	createEndpoint := fmt.Sprintf("%s/drive/v2/files/%s/export", apiBase, url.PathEscape(item.ExternalID))
+	// Step 1: create the export task (form-encoded body, exportType).
+	form := url.Values{}
+	form.Set("exportType", spec.exportType)
+	createEndpoint := fmt.Sprintf("%s/drive/v2/files/%s/async-export", apiBase, url.PathEscape(item.ExternalID))
 	var cre createExportResp
-	if err := p.callAPI(ctx, http.MethodPost, createEndpoint, at, createBody, &cre); err != nil {
+	if err := p.callAPI(ctx, http.MethodPost, createEndpoint, at,
+		[]byte(form.Encode()), "application/x-www-form-urlencoded", &cre); err != nil {
 		return nil, err
 	}
-	if c := bizCode(cre.Ret, cre.Code); c != 0 {
-		return nil, fmt.Errorf("create export task: code=%d msg=%s", c, firstNonEmpty(cre.Msg, cre.Message))
+	if cre.Ret != 0 {
+		return nil, fmt.Errorf("create export task: ret=%d msg=%s", cre.Ret, cre.Msg)
 	}
-	opID := cre.operationID()
-	if opID == "" {
-		return nil, fmt.Errorf("create export task: no operation id returned")
+	if cre.Data.OperationID == "" {
+		return nil, fmt.Errorf("create export task: no operationID returned")
 	}
 
-	// Step 2: poll until complete; get the download URL.
-	dlURL, err := p.pollExport(ctx, at, item.ExternalID, opID)
+	// Step 2: poll until a download URL appears.
+	dlURL, err := p.pollExport(ctx, at, item.ExternalID, cre.Data.OperationID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Step 3: download the exported bytes from the signed URL.
-	data, err := p.download(ctx, at, dlURL)
+	// Step 3: download the exported bytes from the signed URL (pre-signed, no auth).
+	data, err := p.download(ctx, dlURL)
 	if err != nil {
 		return nil, err
 	}
 
-	filename := sanitizeFilename(item.Title) + "." + ext
+	filename := sanitizeFilename(item.Title) + "." + spec.ext
 	return &provider.Blob{
 		Filename:    filename,
-		Format:      ext,
-		ContentType: contentTypes[ext],
+		Format:      spec.ext,
+		ContentType: contentTypes[spec.ext],
 		Data:        data,
 	}, nil
 }
 
-// pollExport polls the export-progress endpoint until completion, returning the
-// download URL.
+// pollExport polls the export-progress endpoint until a download URL is returned.
 func (p *Provider) pollExport(ctx context.Context, accessToken, fileID, opID string) (string, error) {
-	const maxAttempts = 60 // ~60s at 1s interval
-	// ASSUMPTION: GET {apiBase}/drive/v2/files/{fileID}/export/progress?operationID=...
-	q := url.Values{}
-	q.Set("operationID", opID)
-	endpoint := fmt.Sprintf("%s/drive/v2/files/%s/export/progress?%s",
-		apiBase, url.PathEscape(fileID), q.Encode())
+	const maxAttempts = 120 // ~120s at 1s interval (server gives a 20-min window)
+	endpoint := fmt.Sprintf("%s/drive/v2/files/%s/export-progress?operationID=%s",
+		apiBase, url.PathEscape(fileID), url.QueryEscape(opID))
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		var pr exportProgressResp
-		if err := p.callAPI(ctx, http.MethodGet, endpoint, accessToken, nil, &pr); err != nil {
+		if err := p.callAPI(ctx, http.MethodGet, endpoint, accessToken, nil, "", &pr); err != nil {
 			return "", err
 		}
-		if c := bizCode(pr.Ret, pr.Code); c != 0 {
-			return "", fmt.Errorf("export progress: code=%d msg=%s", c, firstNonEmpty(pr.Msg, pr.Message))
+		if pr.Ret != 0 {
+			return "", fmt.Errorf("export progress: ret=%d msg=%s", pr.Ret, pr.Msg)
 		}
-		switch {
-		case pr.Data.Status == "failed":
-			return "", fmt.Errorf("export failed: %s", firstNonEmpty(pr.Msg, pr.Message))
-		case pr.Data.URL != "" && (pr.Data.Progress >= 100 || pr.Data.Status == "done" || pr.Data.Status == ""):
+		if pr.Data.Progress >= 100 && pr.Data.URL != "" {
 			return pr.Data.URL, nil
-		default:
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-time.After(time.Second):
-			}
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(time.Second):
 		}
 	}
-	return "", fmt.Errorf("export task timed out after %ds", maxAttempts)
+	return "", fmt.Errorf("export task timed out")
 }
 
-// download fetches the signed export URL. The URL is returned by Tencent and may
-// already be authenticated; we still send the bearer header defensively.
-func (p *Provider) download(ctx context.Context, accessToken, dlURL string) ([]byte, error) {
+// download fetches the signed export URL. The URL is pre-signed (24h validity), so
+// no auth headers are sent.
+func (p *Provider) download(ctx context.Context, dlURL string) ([]byte, error) {
 	var data []byte
 	err := p.call(ctx, "download export", func() (bool, int, string, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, dlURL, nil)
 		if err != nil {
 			return false, 0, "", err
 		}
-		p.setAuthHeaders(req, accessToken)
 		resp, err := p.http.Do(req)
 		if err != nil {
 			return false, 0, "", err
@@ -528,45 +540,32 @@ func (p *Provider) download(ctx context.Context, accessToken, dlURL string) ([]b
 	return data, nil
 }
 
-// Delete moves the cloud original to Tencent's trash (recoverable).
-//
-// ASSUMPTION: DELETE {apiBase}/drive/v2/files/{fileID} moves the file to trash
-// rather than hard-deleting. Method, path, and trash-vs-purge semantics are all
-// inferred. If Tencent only supports a "trash" POST endpoint, swap this for
-// POST {apiBase}/drive/v2/files/{fileID}/trash.
+// Delete moves the cloud original to Tencent's recycle bin (recoverable). The
+// delete endpoint defaults to a PERMANENT hard delete, so recoverable=1 is
+// mandatory to match docvault's safe "move to trash" semantics.
 func (p *Provider) Delete(ctx context.Context, tok *provider.Token, item provider.Item) error {
-	endpoint := fmt.Sprintf("%s/drive/v2/files/%s", apiBase, url.PathEscape(item.ExternalID))
+	endpoint := fmt.Sprintf("%s/drive/v2/files/%s?recoverable=1", apiBase, url.PathEscape(item.ExternalID))
 	var resp struct {
-		Ret     int    `json:"ret"`
-		Code    int    `json:"code"`
-		Msg     string `json:"msg"`
-		Message string `json:"message"`
+		Ret int    `json:"ret"`
+		Msg string `json:"msg"`
 	}
-	if err := p.callAPI(ctx, http.MethodDelete, endpoint, tok.AccessToken, nil, &resp); err != nil {
+	if err := p.callAPI(ctx, http.MethodDelete, endpoint, tok.AccessToken, nil, "", &resp); err != nil {
 		return err
 	}
-	if c := bizCode(resp.Ret, resp.Code); c != 0 {
-		return fmt.Errorf("delete %q: code=%d msg=%s", item.ExternalID, c, firstNonEmpty(resp.Msg, resp.Message))
+	if resp.Ret != 0 {
+		return fmt.Errorf("delete %q: ret=%d msg=%s", item.ExternalID, resp.Ret, resp.Msg)
 	}
 	return nil
 }
 
-// setAuthHeaders applies the bearer + client-id headers for an authenticated
-// API call.
-//
-// ASSUMPTION: Tencent Docs OpenAPI authenticates with an `Access-Token` header
-// carrying the bare access token (NOT the OAuth2-standard
-// `Authorization: Bearer …`) plus a `Client-Id` header carrying the AppID. This
-// is the header pair named in the task brief; it is NOT verified against
-// docs.qq.com/open. If calls 401, try `Authorization: Bearer <token>` instead.
-func (p *Provider) setAuthHeaders(req *http.Request, accessToken string) {
-	req.Header.Set("Access-Token", accessToken)
-	req.Header.Set("Client-Id", p.appID)
-}
-
-// callAPI performs one rate-limited JSON API call and decodes the response into
-// out. Non-2xx HTTP and 429 are handled via call()'s backoff loop.
-func (p *Provider) callAPI(ctx context.Context, method, endpoint, accessToken string, body []byte, out any) error {
+// callAPI performs one rate-limited authenticated OpenAPI call, resolving the
+// Open-Id header from the access token and decoding the JSON response into out.
+// contentType is set on the request when a body is sent (empty → none).
+func (p *Provider) callAPI(ctx context.Context, method, endpoint, accessToken string, body []byte, contentType string, out any) error {
+	openID, err := p.resolveOpenID(ctx, accessToken)
+	if err != nil {
+		return fmt.Errorf("%s %s: resolve openID: %w", method, endpoint, err)
+	}
 	return p.call(ctx, method+" "+endpoint, func() (bool, int, string, error) {
 		var rdr io.Reader
 		if body != nil {
@@ -576,9 +575,9 @@ func (p *Provider) callAPI(ctx context.Context, method, endpoint, accessToken st
 		if err != nil {
 			return false, 0, "", err
 		}
-		p.setAuthHeaders(req, accessToken)
-		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
+		p.setAuthHeaders(req, accessToken, openID)
+		if body != nil && contentType != "" {
+			req.Header.Set("Content-Type", contentType)
 		}
 		req.Header.Set("Accept", "application/json")
 		resp, err := p.http.Do(req)
@@ -605,10 +604,16 @@ func (p *Provider) callAPI(ctx context.Context, method, endpoint, accessToken st
 	})
 }
 
-// call runs one rate-limited Tencent API attempt, retrying with exponential
-// backoff when the attempt reports the rate-limit sentinel (HTTP 429 →
-// codeRateLimited). Mirrors feishu's call() helper. The attempt closure reports
-// (success, code, msg, transport-error).
+// setAuthHeaders applies the three headers every authenticated OpenAPI call needs:
+// Access-Token (bare token), Client-Id (the AppID), and Open-Id (the user openID).
+func (p *Provider) setAuthHeaders(req *http.Request, accessToken, openID string) {
+	req.Header.Set("Access-Token", accessToken)
+	req.Header.Set("Client-Id", p.appID)
+	req.Header.Set("Open-Id", openID)
+}
+
+// call runs one rate-limited attempt, retrying with exponential backoff when the
+// attempt reports the rate-limit sentinel (HTTP 429). Mirrors feishu's call().
 func (p *Provider) call(ctx context.Context, label string, attempt func() (ok bool, code int, msg string, err error)) error {
 	for i := 0; ; i++ {
 		if err := p.limiter.Wait(ctx); err != nil {
@@ -639,27 +644,11 @@ func (p *Provider) call(ctx context.Context, label string, attempt func() (ok bo
 	}
 }
 
-func bizCode(ret, code int) int {
-	if ret != 0 {
-		return ret
-	}
-	return code
-}
-
 func expiry(seconds int) time.Time {
 	if seconds == 0 {
 		return time.Time{}
 	}
 	return time.Now().Add(time.Duration(seconds) * time.Second)
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 func joinPath(prefix, name string) string {

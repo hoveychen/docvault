@@ -3,6 +3,7 @@ package tencent
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
@@ -12,6 +13,11 @@ import (
 
 func testProvider() *Provider {
 	return New(provider.ConnDef{Type: "tencent", Key: "tencent", Label: "腾讯文档", AppID: "app_x", AppSecret: "s"})
+}
+
+func newReq(t *testing.T) (*http.Request, error) {
+	t.Helper()
+	return http.NewRequest(http.MethodGet, "https://docs.qq.com/openapi/x", nil)
 }
 
 func TestCall_SuccessNoRetry(t *testing.T) {
@@ -93,38 +99,35 @@ func TestAuthCodeURL(t *testing.T) {
 	}
 }
 
-func TestExportableMapping(t *testing.T) {
-	cases := map[string]string{
-		"doc":   "docx",
-		"docx":  "docx",
-		"sheet": "xlsx",
-		"slide": "pptx",
-		"pptx":  "pptx",
-		"pdf":   "pdf",
+func TestExportSpecMapping(t *testing.T) {
+	cases := map[string]struct{ exportType, ext string }{
+		"doc":         {"doc", "docx"},
+		"sheet":       {"sheet", "xlsx"},
+		"slide":       {"slide", "pptx"},
+		"pdf":         {"pdf", "pdf"},
+		"smartcanvas": {"doc", "docx"},
 	}
-	for docType, wantExt := range cases {
-		got, ok := exportable[docType]
+	for docType, want := range cases {
+		got, ok := exportSpec[docType]
 		if !ok {
 			t.Errorf("doc type %q should be exportable", docType)
 			continue
 		}
-		if got != wantExt {
-			t.Errorf("doc type %q: want ext %q, got %q", docType, wantExt, got)
+		if got.exportType != want.exportType || got.ext != want.ext {
+			t.Errorf("doc type %q: want %+v, got %+v", docType, want, got)
 		}
 	}
-	if _, ok := exportable["folder"]; ok {
+	if _, ok := exportSpec["folder"]; ok {
 		t.Error("folder must not be exportable")
 	}
 }
 
-func TestExportableHasContentType(t *testing.T) {
+func TestExportSpecHasContentType(t *testing.T) {
 	// Every export extension we can produce must have a content type mapping,
 	// otherwise the Blob ships with an empty ContentType.
-	for _, ext := range exportable {
-		if ext == "pdf" || ext == "docx" || ext == "xlsx" || ext == "pptx" {
-			if contentTypes[ext] == "" {
-				t.Errorf("ext %q missing content type", ext)
-			}
+	for _, spec := range exportSpec {
+		if contentTypes[spec.ext] == "" {
+			t.Errorf("ext %q missing content type", spec.ext)
 		}
 	}
 }
@@ -161,46 +164,37 @@ func TestJoinPath(t *testing.T) {
 	}
 }
 
-func TestFileEntryAccessors(t *testing.T) {
-	f := fileEntry{ID: "id1", Title: "T", Type: "doc"}
-	if f.id() != "id1" || f.title() != "T" || f.docType() != "doc" {
-		t.Errorf("accessors wrong: %q %q %q", f.id(), f.title(), f.docType())
+func TestFileEntryIsFolder(t *testing.T) {
+	if !(fileEntry{ID: "y", Type: "folder"}).isFolder() {
+		t.Error("type=folder must be a folder")
 	}
-	// alternate spellings + folder detection
-	f2 := fileEntry{FileID: "fid", Name: "N", FileType: "sheet"}
-	if f2.id() != "fid" || f2.title() != "N" || f2.docType() != "sheet" {
-		t.Errorf("alt accessors wrong: %q %q %q", f2.id(), f2.title(), f2.docType())
-	}
-	f3 := fileEntry{ID: "x", IsFolder: true}
-	if f3.docType() != "folder" {
-		t.Errorf("folder flag not honored: %q", f3.docType())
-	}
-	f4 := fileEntry{ID: "y", Type: "folder"}
-	if f4.docType() != "folder" {
-		t.Errorf("folder type not honored: %q", f4.docType())
+	if (fileEntry{ID: "x", Type: "doc"}).isFolder() {
+		t.Error("type=doc must not be a folder")
 	}
 }
 
-func TestFirstNonEmpty(t *testing.T) {
-	if firstNonEmpty("", "", "z") != "z" {
-		t.Error("want z")
-	}
-	if firstNonEmpty("a", "b") != "a" {
-		t.Error("want a")
-	}
-	if firstNonEmpty("", "") != "" {
-		t.Error("want empty")
+// resolveOpenID must return a cached openID without any network call.
+func TestResolveOpenID_CacheHit(t *testing.T) {
+	p := testProvider()
+	p.openIDs.Store("at-123", "open-abc")
+	got, err := p.resolveOpenID(context.Background(), "at-123")
+	if err != nil || got != "open-abc" {
+		t.Fatalf("want cached open-abc, got %q err=%v", got, err)
 	}
 }
 
-func TestBizCode(t *testing.T) {
-	if bizCode(5, 0) != 5 {
-		t.Error("ret should win")
+// setAuthHeaders must set all three required headers.
+func TestSetAuthHeaders(t *testing.T) {
+	p := testProvider()
+	req, _ := newReq(t)
+	p.setAuthHeaders(req, "tok-1", "open-9")
+	if req.Header.Get("Access-Token") != "tok-1" {
+		t.Errorf("Access-Token wrong: %q", req.Header.Get("Access-Token"))
 	}
-	if bizCode(0, 7) != 7 {
-		t.Error("code fallback")
+	if req.Header.Get("Client-Id") != "app_x" {
+		t.Errorf("Client-Id wrong: %q", req.Header.Get("Client-Id"))
 	}
-	if bizCode(0, 0) != 0 {
-		t.Error("zero")
+	if req.Header.Get("Open-Id") != "open-9" {
+		t.Errorf("Open-Id wrong: %q", req.Header.Get("Open-Id"))
 	}
 }
