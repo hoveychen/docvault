@@ -25,14 +25,19 @@ func TestCall_NoPermissionWrapsSentinel(t *testing.T) {
 	}
 }
 
-// An unsupported doc type must surface as provider.ErrNotExportable (a skip),
-// not a generic failure. The unsupported-type branch returns before any API call.
+// Doc types the Feishu export-task API can't handle must surface as
+// provider.ErrNotExportable (a skip), returning before any API call. The export
+// API only supports doc/docx/sheet/bitable — notably NOT slides (its
+// file_extension list has no pptx) nor mindnote, so those must be treated as
+// non-exportable rather than attempted (which fails with code=99992402).
 func TestExport_UnsupportedTypeIsNotExportable(t *testing.T) {
 	p := testProvider()
-	_, err := p.Export(context.Background(), &provider.Token{AccessToken: "x"},
-		provider.Item{ExternalID: "n", Title: "Mind", DocType: "mindnote"})
-	if !errors.Is(err, provider.ErrNotExportable) {
-		t.Fatalf("want ErrNotExportable, got %v", err)
+	for _, dt := range []string{"mindnote", "slides"} {
+		_, err := p.Export(context.Background(), &provider.Token{AccessToken: "x"},
+			provider.Item{ExternalID: "n", Title: "X", DocType: dt})
+		if !errors.Is(err, provider.ErrNotExportable) {
+			t.Fatalf("doc type %q: want ErrNotExportable, got %v", dt, err)
+		}
 	}
 }
 
