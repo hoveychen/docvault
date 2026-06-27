@@ -185,6 +185,7 @@ export const api = {
   adminSyncJobs: () => req<{ jobs: AdminSyncJob[] }>("/api/admin/sync-jobs"),
   adminRequeueJob: (id: string) =>
     req<{ status: string }>(`/api/admin/sync-jobs/${id}/requeue`, { method: "POST" }),
+  adminResyncAll: () => req<{ enqueued: number }>("/api/admin/resync-all", { method: "POST" }),
   adminArchiveStats: () => req<{ users: UserArchiveStat[] }>("/api/admin/archive-stats"),
   adminSyncFailures: () =>
     req<{ by_type: TypeStat[]; by_error: FailureReason[]; by_skipped: FailureReason[] }>(
