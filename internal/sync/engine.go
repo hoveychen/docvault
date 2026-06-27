@@ -288,8 +288,30 @@ func NewWorker(repo *db.Repo, engine *Engine, log *slog.Logger) *Worker {
 	return &Worker{repo: repo, engine: engine, log: log, interval: 2 * time.Second}
 }
 
-// Start blocks, draining the queue until ctx is cancelled.
+// staleJobThreshold bounds how long a job may sit in 'running' without progress
+// before the periodic reaper requeues it. Kept comfortably above sliceHardCap
+// (20m) so a healthy slice — which requeues within SliceBudget or finishes at
+// the hard cap — is never mistaken for an orphan.
+const staleJobThreshold = 30 * time.Minute
+
+// reapInterval is how often the background reaper sweeps for stale running jobs.
+const reapInterval = 5 * time.Minute
+
+// Start blocks, draining the queue until ctx is cancelled. Before polling it
+// reclaims orphaned jobs left 'running' by a previously-killed worker (the queue
+// has no lease, so a worker killed mid-slice — e.g. a deploy recreating the
+// container — would otherwise wedge that account's sync forever). A single
+// worker process owns the queue, so at startup no slice can be running and every
+// 'running' row is a guaranteed orphan: cutoff=now reclaims them all. A
+// background reaper then sweeps periodically as a safety net.
 func (w *Worker) Start(ctx context.Context) {
+	if n, err := w.repo.ReclaimStaleJobs(ctx, time.Now()); err != nil {
+		w.log.Error("startup reclaim failed", "err", err)
+	} else if n > 0 {
+		w.log.Info("reclaimed orphaned running jobs at startup", "count", n)
+	}
+	go w.reapStaleJobs(ctx)
+
 	w.log.Info("worker started", "poll_interval", w.interval.String())
 	for {
 		select {
@@ -315,6 +337,27 @@ func (w *Worker) Start(ctx context.Context) {
 		}
 
 		w.runSlice(ctx, job)
+	}
+}
+
+// reapStaleJobs periodically requeues jobs stuck in 'running' past
+// staleJobThreshold. Startup reclaim already clears orphans left by a worker
+// restart; this covers the rarer case of a job wedged 'running' while the worker
+// keeps running (e.g. a DB error prevented FinishJob/RequeueJob from landing).
+func (w *Worker) reapStaleJobs(ctx context.Context) {
+	ticker := time.NewTicker(reapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if n, err := w.repo.ReclaimStaleJobs(ctx, time.Now().Add(-staleJobThreshold)); err != nil {
+			w.log.Error("reap stale jobs failed", "err", err)
+		} else if n > 0 {
+			w.log.Warn("reclaimed stale running jobs", "count", n, "threshold", staleJobThreshold.String())
+		}
 	}
 }
 
