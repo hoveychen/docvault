@@ -80,6 +80,14 @@ type SyncJob struct {
 	FinishedAt        *time.Time    `json:"finished_at,omitempty"`
 }
 
+// AdminSyncJob is a sync job enriched with its owner's display name, for the
+// admin sync-queue panel. The embedded SyncJob's fields flatten into the same
+// JSON object.
+type AdminSyncJob struct {
+	SyncJob
+	DisplayName string `json:"display_name"`
+}
+
 // JobItem statuses: one row per source item snapshotted for a sliced sync job.
 const (
 	JobItemPending = "pending"
