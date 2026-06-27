@@ -192,3 +192,19 @@ type TypeStat struct {
 	Archived   int    `json:"archived"`
 	Unarchived int    `json:"unarchived"`
 }
+
+// UserArchiveStat is one user's archive totals, for the admin per-user panel.
+type UserArchiveStat struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	Total       int    `json:"total"`
+	Archived    int    `json:"archived"`
+	Unarchived  int    `json:"unarchived"`
+}
+
+// FailureReason is a distinct sync-item error message and how many items hit it,
+// for the admin failure-diagnostics view.
+type FailureReason struct {
+	Error string `json:"error"`
+	Count int    `json:"count"`
+}
