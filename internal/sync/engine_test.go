@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -249,5 +250,62 @@ func TestRunSliceSkipsAlreadyArchived(t *testing.T) {
 	}
 	if fp.callCount("D") != 2 {
 		t.Fatalf("unarchived doc D should be retried; want 2 export calls, got %d", fp.callCount("D"))
+	}
+}
+
+// Export errors wrapping provider.ErrPermissionDenied / ErrNotExportable must be
+// recorded as skipped (not failed), so the failure diagnostics show only genuine
+// errors and the skip diagnostics show the no-permission / unsupported ones.
+func TestRunSliceClassifiesSkipsVsFailures(t *testing.T) {
+	fp := &fakeProvider{
+		items: []provider.Item{
+			{ExternalID: "A", Title: "DocA", DocType: "docx"},   // ok
+			{ExternalID: "P", Title: "NoPerm", DocType: "docx"}, // no permission -> skipped
+			{ExternalID: "U", Title: "Mind", DocType: "mindnote"}, // unsupported -> skipped
+			{ExternalID: "F", Title: "Boom", DocType: "docx"},   // genuine -> failed
+		},
+		exportErr: map[string]error{
+			"P": fmt.Errorf("create export task: code=1069902 msg=no permission: %w", provider.ErrPermissionDenied),
+			"U": fmt.Errorf("doc type %q: %w", "mindnote", provider.ErrNotExportable),
+			"F": errors.New("server exploded"),
+		},
+		calls: map[string]int{},
+	}
+	eng, repo, ctx, uid, accID := testEngine(t, fp)
+
+	if _, err := repo.EnqueueSyncJob(ctx, uid, accID, "feishu"); err != nil {
+		t.Fatal(err)
+	}
+	driveToCompletion(t, eng, repo, ctx)
+
+	// Only the genuine error counts as failed; the two skips are excluded.
+	jr, _ := repo.LatestJob(ctx, uid)
+	if jr.FailedItems != 1 {
+		t.Fatalf("want 1 failed (genuine error only), got %d", jr.FailedItems)
+	}
+
+	fails, err := repo.SyncFailureReasons(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fails) != 1 || fails[0].Error != "server exploded" {
+		t.Fatalf("failure reasons should be only the genuine error, got %+v", fails)
+	}
+
+	skips, err := repo.SyncSkippedReasons(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(skips) != 2 {
+		t.Fatalf("want 2 skip reasons (no-permission + unsupported), got %d: %+v", len(skips), skips)
+	}
+	// A archived; the rest (skipped or failed) have no copy.
+	if archived, _ := repo.IsArchived(ctx, uid, "feishu", "A"); !archived {
+		t.Fatal("doc A should be archived")
+	}
+	for _, id := range []string{"P", "U", "F"} {
+		if archived, _ := repo.IsArchived(ctx, uid, "feishu", id); archived {
+			t.Fatalf("doc %s should not be archived", id)
+		}
 	}
 }

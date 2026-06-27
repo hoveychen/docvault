@@ -423,11 +423,12 @@ function SyncFailures() {
   const { t } = useTranslation();
   const [byType, setByType] = useState<TypeStat[]>([]);
   const [byError, setByError] = useState<FailureReason[]>([]);
+  const [bySkipped, setBySkipped] = useState<FailureReason[]>([]);
   const [err, setErr] = useState("");
 
   const load = useCallback(() => {
     api.adminSyncFailures()
-      .then((r) => { setByType(r.by_type || []); setByError(r.by_error || []); })
+      .then((r) => { setByType(r.by_type || []); setByError(r.by_error || []); setBySkipped(r.by_skipped || []); })
       .catch((e) => setErr(String(e)));
   }, []);
   useEffect(load, [load]);
@@ -463,6 +464,22 @@ function SyncFailures() {
           <div className="data-row text-tertiary" style={{ fontSize: 13 }}>{t("admin.failures.none")}</div>
         )}
         {byError.map((f, i) => (
+          <div className="data-row" key={i}>
+            <div className="data-row__main">
+              <div className="data-row__sub mono" style={{ wordBreak: "break-word" }}>{f.error}</div>
+            </div>
+            <Badge tone="danger">{f.count}</Badge>
+          </div>
+        ))}
+      </div>
+
+      <h4 style={{ margin: "16px 0 8px", fontSize: 13 }}>{t("admin.failures.bySkipped")}</h4>
+      <p className="panel-section__desc">{t("admin.failures.skippedDesc")}</p>
+      <div className="data-card">
+        {bySkipped.length === 0 && (
+          <div className="data-row text-tertiary" style={{ fontSize: 13 }}>{t("admin.failures.none")}</div>
+        )}
+        {bySkipped.map((f, i) => (
           <div className="data-row" key={i}>
             <div className="data-row__main">
               <div className="data-row__sub mono" style={{ wordBreak: "break-word" }}>{f.error}</div>

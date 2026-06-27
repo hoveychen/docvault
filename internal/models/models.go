@@ -93,6 +93,11 @@ const (
 	JobItemPending = "pending"
 	JobItemDone    = "done"
 	JobItemFailed  = "failed"
+	// JobItemSkipped: the item legitimately can't be exported (no permission /
+	// unsupported type) — recorded distinctly from JobItemFailed so diagnostics
+	// separate genuine errors from expected non-exports. Like done/failed it is a
+	// terminal status (not re-fetched as pending), so a job still completes.
+	JobItemSkipped = "skipped"
 )
 
 // JobItem is one unit of work in a sliced sync job. On first claim the engine

@@ -153,13 +153,21 @@ func (h *Handler) adminSyncFailures(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "stats failed")
 		return
 	}
+	bySkipped, err := h.app.Repo.SyncSkippedReasons(r.Context(), 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stats failed")
+		return
+	}
 	if byType == nil {
 		byType = []models.TypeStat{}
 	}
 	if byError == nil {
 		byError = []models.FailureReason{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"by_type": byType, "by_error": byError})
+	if bySkipped == nil {
+		bySkipped = []models.FailureReason{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"by_type": byType, "by_error": byError, "by_skipped": bySkipped})
 }
 
 // --- connections ---

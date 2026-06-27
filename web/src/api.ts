@@ -187,5 +187,7 @@ export const api = {
     req<{ status: string }>(`/api/admin/sync-jobs/${id}/requeue`, { method: "POST" }),
   adminArchiveStats: () => req<{ users: UserArchiveStat[] }>("/api/admin/archive-stats"),
   adminSyncFailures: () =>
-    req<{ by_type: TypeStat[]; by_error: FailureReason[] }>("/api/admin/sync-failures"),
+    req<{ by_type: TypeStat[]; by_error: FailureReason[]; by_skipped: FailureReason[] }>(
+      "/api/admin/sync-failures",
+    ),
 };

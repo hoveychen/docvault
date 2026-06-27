@@ -27,6 +27,11 @@ import (
 // Lark "request trigger frequency limit" error code; we back off and retry on it.
 const codeFrequencyLimit = 99991400
 
+// Lark export-task "no read/edit permission" error code. The authorizing user
+// lacks export-grade permission on the file (a read-only / no-copy share) — not
+// a docvault fault and not fixable by scopes, so we surface it as a skip.
+const codeNoPermission = 1069902
+
 const (
 	apiRatePerSec = 8 // conservative steady-state request rate per app
 	apiBurst      = 8
@@ -121,6 +126,11 @@ func (p *Provider) call(ctx context.Context, label string, attempt func() (ok bo
 			case <-time.After(backoff):
 			}
 			continue
+		}
+		if code == codeNoPermission {
+			// User can't export this file (read-only / no-copy share). Surface as a
+			// skip sentinel so the engine records it skipped, not failed.
+			return fmt.Errorf("%s: code=%d msg=%s: %w", label, code, msg, provider.ErrPermissionDenied)
 		}
 		return fmt.Errorf("%s: code=%d msg=%s", label, code, msg)
 	}
@@ -528,7 +538,7 @@ func (p *Provider) Export(ctx context.Context, tok *provider.Token, item provide
 	}
 	ext, ok := exportable[item.DocType]
 	if !ok {
-		return nil, fmt.Errorf("doc type %q is not exportable", item.DocType)
+		return nil, fmt.Errorf("doc type %q: %w", item.DocType, provider.ErrNotExportable)
 	}
 	at := tok.AccessToken
 	opt := larkcore.WithUserAccessToken(at)
