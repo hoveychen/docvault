@@ -639,13 +639,22 @@ func (r *Repo) UnarchivedByType(ctx context.Context) ([]models.TypeStat, error) 
 }
 
 // SyncFailureReasons returns the most common sync-item failure messages with
-// counts, for failure diagnostics.
+// counts, for failure diagnostics. Only each account's most recent sync job is
+// counted: sync_job_items accumulates a row per item per job, so a doc that
+// fails every scheduled re-sync would otherwise be counted once per round and
+// the totals would balloon far past the real number of currently-failing items.
 func (r *Repo) SyncFailureReasons(ctx context.Context, limit int) ([]models.FailureReason, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT error, count(*) AS n
-		  FROM sync_job_items
-		 WHERE status='failed' AND error <> ''
-		 GROUP BY error
+		WITH latest AS (
+			SELECT DISTINCT ON (provider_account_id) id
+			  FROM sync_jobs
+			 ORDER BY provider_account_id, created_at DESC
+		)
+		SELECT i.error, count(*) AS n
+		  FROM sync_job_items i
+		 WHERE i.status='failed' AND i.error <> ''
+		   AND i.job_id IN (SELECT id FROM latest)
+		 GROUP BY i.error
 		 ORDER BY n DESC
 		 LIMIT $1`, limit)
 	if err != nil {
