@@ -138,6 +138,22 @@ const en = {
       microsoft: "Office 365",
       tencent: "Tencent Docs",
     },
+    syncQueue: {
+      title: "Sync queue ({{count}})",
+      desc: "Sync jobs across all users, with running / queued ones first. Jobs stuck 'running' for over 30 minutes are flagged — hit Requeue to let the worker pick them up again (no redeploy needed).",
+      empty: "No sync jobs yet.",
+      refresh: "Refresh",
+      requeue: "Requeue",
+      stuck: "Likely stuck",
+      progress: "{{done}}/{{total}}",
+      failedCount: "{{count}} failed",
+      status: {
+        queued: "Queued",
+        running: "Running",
+        succeeded: "Succeeded",
+        failed: "Failed",
+      },
+    },
   },
   settings: {
     title: "Settings",

@@ -136,6 +136,22 @@ const zh = {
       microsoft: "Office 365",
       tencent: "腾讯文档",
     },
+    syncQueue: {
+      title: "同步队列（{{count}}）",
+      desc: "所有用户的同步任务，运行中 / 排队中的排在前面。卡在「运行中」超过 30 分钟的会标红——点「解冻」让 worker 重新拾取（无需重新部署）。",
+      empty: "暂无同步任务。",
+      refresh: "刷新",
+      requeue: "解冻",
+      stuck: "疑似卡死",
+      progress: "{{done}}／{{total}}",
+      failedCount: "{{count}} 个失败",
+      status: {
+        queued: "排队中",
+        running: "运行中",
+        succeeded: "已完成",
+        failed: "失败",
+      },
+    },
   },
   settings: {
     title: "设置",
