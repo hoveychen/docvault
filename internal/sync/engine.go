@@ -4,6 +4,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"path"
@@ -188,13 +189,19 @@ func (e *Engine) processItem(ctx context.Context, job *models.SyncJob, providerK
 
 	blob, err := prov.Export(ctx, tok, item)
 	if err != nil {
-		// Non-exportable types and per-item failures are recorded (object_key stays
-		// empty = not archived) but don't abort the slice.
-		e.log.Warn("skip item", "title", it.Title, "doc_type", it.DocType, "err", err)
+		// Per-item export problems are recorded (object_key stays empty = not
+		// archived) but don't abort the slice. Classify "can't export through no
+		// fault of ours" (no permission / unsupported type) as skipped so the
+		// diagnostics separate those from genuine errors.
+		status := models.JobItemFailed
+		if errors.Is(err, provider.ErrPermissionDenied) || errors.Is(err, provider.ErrNotExportable) {
+			status = models.JobItemSkipped
+		}
+		e.log.Warn("export problem", "title", it.Title, "doc_type", it.DocType, "status", status, "err", err)
 		if uerr := e.repo.UpsertDocument(ctx, doc); uerr != nil {
 			return fmt.Errorf("record unarchived document: %w", uerr)
 		}
-		return e.repo.MarkJobItem(ctx, it.ID, models.JobItemFailed, err.Error())
+		return e.repo.MarkJobItem(ctx, it.ID, status, err.Error())
 	}
 
 	key := objectKey(job.UserID, providerKey, it.ExternalID, blob.Filename)
