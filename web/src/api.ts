@@ -99,6 +99,21 @@ export interface ArchiveStats {
   by_type: TypeStat[];
 }
 
+export interface AdminSyncJob {
+  id: string;
+  user_id: string;
+  display_name: string;
+  provider: string;
+  status: string;
+  total_items: number;
+  done_items: number;
+  failed_items: number;
+  error?: string;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { credentials: "include", ...init });
   if (!res.ok) {
@@ -154,4 +169,7 @@ export const api = {
     }),
   adminDeleteConnection: (id: string) =>
     req<{ status: string }>(`/api/admin/connections/${id}`, { method: "DELETE" }),
+  adminSyncJobs: () => req<{ jobs: AdminSyncJob[] }>("/api/admin/sync-jobs"),
+  adminRequeueJob: (id: string) =>
+    req<{ status: string }>(`/api/admin/sync-jobs/${id}/requeue`, { method: "POST" }),
 };

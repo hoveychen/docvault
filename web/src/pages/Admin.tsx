@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate } from "react-router-dom";
-import { Plus, Shield } from "lucide-react";
-import { api, type Connection, type ConnectionInput, type User } from "../api";
+import { Plus, RefreshCw, RotateCcw, Shield } from "lucide-react";
+import { api, type AdminSyncJob, type Connection, type ConnectionInput, type User } from "../api";
 import { usePageUser } from "../App";
 import i18n from "../lib/i18n";
+import { formatRelative } from "../lib/format";
 import { Avatar, Badge, Button, Field, Input } from "../components/ui";
 
 export function Admin() {
@@ -24,6 +25,7 @@ export function Admin() {
         <div className="page-pad panel">
           <Members meId={me.id} />
           <Connections />
+          <SyncQueue />
         </div>
       </div>
     </div>
@@ -274,6 +276,89 @@ function Connections() {
           </p>
         </div>
       )}
+    </section>
+  );
+}
+
+// A job is treated as wedged once it has been 'running' longer than the worker's
+// stale-job reaper threshold (30m); past that, a healthy slice would have
+// requeued or finished, so it's an orphan worth surfacing + offering to requeue.
+const STUCK_MS = 30 * 60 * 1000;
+
+function SyncQueue() {
+  const { t } = useTranslation();
+  const [jobs, setJobs] = useState<AdminSyncJob[]>([]);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+
+  const load = useCallback(() => {
+    api.adminSyncJobs().then((r) => setJobs(r.jobs || [])).catch((e) => setErr(String(e)));
+  }, []);
+  useEffect(load, [load]);
+
+  const requeue = async (id: string) => {
+    setErr("");
+    setBusy(id);
+    try {
+      await api.adminRequeueJob(id);
+      load();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const isStuck = (j: AdminSyncJob) =>
+    j.status === "running" && Date.now() - new Date(j.created_at).getTime() > STUCK_MS;
+  const statusTone = (s: string): "accent" | "neutral" | "danger" =>
+    s === "failed" ? "danger" : s === "running" ? "accent" : "neutral";
+
+  return (
+    <section className="panel-section">
+      <div className="panel-section__head">
+        <h3>{t("admin.syncQueue.title", { count: jobs.length })}</h3>
+        <Button size="sm" icon={RefreshCw} onClick={load}>{t("admin.syncQueue.refresh")}</Button>
+      </div>
+      <p className="panel-section__desc">{t("admin.syncQueue.desc")}</p>
+      {err && <p className="error-text" style={{ fontSize: 13, marginBottom: 10 }}>{err}</p>}
+      <div className="data-card">
+        {jobs.length === 0 && (
+          <div className="data-row text-tertiary" style={{ fontSize: 13 }}>{t("admin.syncQueue.empty")}</div>
+        )}
+        {jobs.map((j) => {
+          const stuck = isStuck(j);
+          const canRequeue = j.status === "running" || j.status === "failed";
+          return (
+            <div className="data-row" key={j.id}>
+              <div className="data-row__main">
+                <div className="data-row__title">
+                  {j.display_name || j.user_id}
+                  <span className="text-tertiary mono" style={{ fontSize: 11, marginLeft: 8 }}>{j.provider}</span>
+                </div>
+                <div className="data-row__sub mono">
+                  {t("admin.syncQueue.progress", { done: j.done_items, total: j.total_items })}
+                  {j.failed_items > 0 ? ` · ${t("admin.syncQueue.failedCount", { count: j.failed_items })}` : ""}
+                  {" · "}
+                  {formatRelative(j.started_at || j.created_at)}
+                  {j.error ? ` · ${j.error}` : ""}
+                </div>
+              </div>
+              {stuck && <Badge tone="danger">{t("admin.syncQueue.stuck")}</Badge>}
+              <Badge tone={statusTone(j.status)}>
+                {t(`admin.syncQueue.status.${j.status}`, { defaultValue: j.status })}
+              </Badge>
+              {canRequeue && (
+                <div className="data-row__actions">
+                  <Button size="sm" icon={RotateCcw} disabled={busy === j.id} onClick={() => requeue(j.id)}>
+                    {t("admin.syncQueue.requeue")}
+                  </Button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </section>
   );
 }

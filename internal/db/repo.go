@@ -438,6 +438,42 @@ func (r *Repo) LatestJob(ctx context.Context, userID string) (*models.SyncJob, e
 	return job, err
 }
 
+// ListRecentJobs returns the most recent sync jobs across all users, enriched
+// with the owner's display name, for the admin queue panel. Active jobs sort
+// first (running, then queued) so a wedged job is easy to spot, then the rest
+// newest-first.
+func (r *Repo) ListRecentJobs(ctx context.Context, limit int) ([]models.AdminSyncJob, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT j.id, j.user_id, j.provider_account_id, j.provider, j.status,
+		        j.total_items, j.done_items, j.failed_items, j.error,
+		        j.created_at, j.started_at, j.finished_at,
+		        COALESCE(u.display_name, '')
+		   FROM sync_jobs j
+		   LEFT JOIN users u ON u.id = j.user_id
+		  ORDER BY CASE j.status
+		             WHEN 'running' THEN 0
+		             WHEN 'queued'  THEN 1
+		             ELSE 2
+		           END,
+		           j.created_at DESC
+		  LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.AdminSyncJob
+	for rows.Next() {
+		var j models.AdminSyncJob
+		if err := rows.Scan(&j.ID, &j.UserID, &j.ProviderAccountID, &j.Provider, &j.Status,
+			&j.TotalItems, &j.DoneItems, &j.FailedItems, &j.Error,
+			&j.CreatedAt, &j.StartedAt, &j.FinishedAt, &j.DisplayName); err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
 // HasActiveJob reports whether the user already has a queued/running job.
 func (r *Repo) HasActiveJob(ctx context.Context, userID string) (bool, error) {
 	var exists bool

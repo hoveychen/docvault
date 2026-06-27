@@ -136,6 +136,22 @@ const ja = {
       microsoft: "Office 365",
       tencent: "Tencent Docs",
     },
+    syncQueue: {
+      title: "同期キュー（{{count}}）",
+      desc: "全ユーザーの同期ジョブ。実行中／待機中が上に表示されます。30 分以上「実行中」のままのジョブは警告表示されます——「再キュー」を押すとワーカーが再取得します（再デプロイ不要）。",
+      empty: "同期ジョブはまだありません。",
+      refresh: "更新",
+      requeue: "再キュー",
+      stuck: "停止の疑い",
+      progress: "{{done}}／{{total}}",
+      failedCount: "{{count}} 件失敗",
+      status: {
+        queued: "待機中",
+        running: "実行中",
+        succeeded: "完了",
+        failed: "失敗",
+      },
+    },
   },
   settings: {
     title: "設定",
