@@ -284,6 +284,28 @@ func (r *Repo) RequeueJob(ctx context.Context, jobID string) error {
 	return err
 }
 
+// ReclaimStaleJobs resets orphaned 'running' jobs back to 'queued' so the worker
+// can pick them up again. A job is stale when its last activity
+// (last_sliced_at, else started_at, else created_at) predates cutoff. The queue
+// has no lease/heartbeat, so a worker killed mid-slice (e.g. a deploy that
+// recreates the worker container) leaves its claimed job stuck in 'running'
+// forever — wedging both the scheduler (AccountsDueForSync skips running jobs)
+// and the manual sync button (HasActiveJob sees running). This is the recovery
+// path: the worker calls it at startup with cutoff=now (single worker => every
+// running row is an orphan) and periodically with a cutoff well past the slice
+// hard cap as a safety net. Returns how many jobs were reclaimed.
+func (r *Repo) ReclaimStaleJobs(ctx context.Context, cutoff time.Time) (int, error) {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE sync_jobs SET status='queued'
+		  WHERE status='running'
+		    AND COALESCE(last_sliced_at, started_at, created_at) < $1`,
+		cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 func (r *Repo) UpdateJobProgress(ctx context.Context, jobID string, total, done, failed int) error {
 	_, err := r.pool.Exec(ctx,
 		`UPDATE sync_jobs SET total_items=$1, done_items=$2, failed_items=$3 WHERE id=$4`,
