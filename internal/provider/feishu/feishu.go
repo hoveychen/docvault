@@ -39,22 +39,22 @@ const (
 )
 
 // exportable maps a Feishu doc type to the export file extension we request via
-// the export-task API. Types not present here (e.g. "file") are handled
-// separately or skipped. Per-item export failures are non-fatal (the engine
-// logs and skips them), so best-effort types like bitable/slides are safe to
-// list even where a given tenant rejects the format.
+// the export-task API. The API only supports these four source types (its
+// file_extension list is docx/pdf/xlsx/csv — notably NO pptx), so anything not
+// listed here (file, slides, mindnote, shortcut, …) is routed to the
+// not-exportable skip path instead of a doomed export call. "slides" in
+// particular used to be listed and produced a code=99992402 failure on every
+// presentation.
 var exportable = map[string]string{
 	"docx":    "docx",
 	"doc":     "docx",
 	"sheet":   "xlsx",
 	"bitable": "xlsx",
-	"slides":  "pptx",
 }
 
 var contentTypes = map[string]string{
 	"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 	"xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-	"pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 	"pdf":  "application/pdf",
 }
 
