@@ -126,6 +126,17 @@ func (h *Handler) adminRequeueSyncJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
 }
 
+// adminResyncAll queues a sync for every eligible account (no active job), so an
+// admin can refresh the diagnostics now instead of waiting for the scheduler.
+func (h *Handler) adminResyncAll(w http.ResponseWriter, r *http.Request) {
+	n, err := h.app.Repo.EnqueueAllAccounts(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "resync failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"enqueued": n})
+}
+
 // adminArchiveStats returns per-user archive totals (total / archived /
 // unarchived) for the admin per-user backup-status panel.
 func (h *Handler) adminArchiveStats(w http.ResponseWriter, r *http.Request) {
