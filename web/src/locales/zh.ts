@@ -152,6 +152,23 @@ const zh = {
         failed: "失败",
       },
     },
+    userStats: {
+      title: "用户归档状态（{{count}}）",
+      desc: "按用户统计已归档 / 未归档的文档数（来自 documents 表，未同步多的排在前面）。",
+      empty: "暂无文档。",
+      refresh: "刷新",
+      line: "已同步 {{archived}} / {{total}}（{{pct}}%）",
+      pending: "{{count}} 个未同步",
+    },
+    failures: {
+      title: "未归档诊断",
+      desc: "为什么有文档没归档：按文档类型和按失败错误信息两个维度看。",
+      refresh: "刷新",
+      none: "没有未归档项。",
+      byType: "按文档类型（未归档数）",
+      byError: "按失败原因",
+      typeLine: "{{unarchived}} 未归档 / 共 {{total}}",
+    },
   },
   settings: {
     title: "设置",

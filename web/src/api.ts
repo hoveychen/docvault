@@ -114,6 +114,19 @@ export interface AdminSyncJob {
   finished_at?: string | null;
 }
 
+export interface UserArchiveStat {
+  user_id: string;
+  display_name: string;
+  total: number;
+  archived: number;
+  unarchived: number;
+}
+
+export interface FailureReason {
+  error: string;
+  count: number;
+}
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { credentials: "include", ...init });
   if (!res.ok) {
@@ -172,4 +185,7 @@ export const api = {
   adminSyncJobs: () => req<{ jobs: AdminSyncJob[] }>("/api/admin/sync-jobs"),
   adminRequeueJob: (id: string) =>
     req<{ status: string }>(`/api/admin/sync-jobs/${id}/requeue`, { method: "POST" }),
+  adminArchiveStats: () => req<{ users: UserArchiveStat[] }>("/api/admin/archive-stats"),
+  adminSyncFailures: () =>
+    req<{ by_type: TypeStat[]; by_error: FailureReason[] }>("/api/admin/sync-failures"),
 };
