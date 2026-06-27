@@ -583,6 +583,86 @@ func (r *Repo) ArchiveStats(ctx context.Context, userID string) (*models.Archive
 	return stats, nil
 }
 
+// ListUserArchiveStats returns per-user archive totals (worst-backed-up first),
+// for the admin per-user panel.
+func (r *Repo) ListUserArchiveStats(ctx context.Context) ([]models.UserArchiveStat, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT d.user_id,
+		       COALESCE(u.display_name, ''),
+		       count(*)                                 AS total,
+		       count(*) FILTER (WHERE d.object_key <> '') AS archived,
+		       count(*) FILTER (WHERE d.object_key = '')  AS unarchived
+		  FROM documents d
+		  LEFT JOIN users u ON u.id = d.user_id
+		 GROUP BY d.user_id, u.display_name
+		 ORDER BY unarchived DESC, total DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.UserArchiveStat
+	for rows.Next() {
+		var s models.UserArchiveStat
+		if err := rows.Scan(&s.UserID, &s.DisplayName, &s.Total, &s.Archived, &s.Unarchived); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// UnarchivedByType returns, across all users, the unarchived document count per
+// doc_type (most-unarchived first), to show which types aren't being archived.
+func (r *Repo) UnarchivedByType(ctx context.Context) ([]models.TypeStat, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT doc_type,
+		       count(*)                                  AS total,
+		       count(*) FILTER (WHERE object_key <> '')  AS archived,
+		       count(*) FILTER (WHERE object_key = '')   AS unarchived
+		  FROM documents
+		 GROUP BY doc_type
+		HAVING count(*) FILTER (WHERE object_key = '') > 0
+		 ORDER BY unarchived DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.TypeStat
+	for rows.Next() {
+		var t models.TypeStat
+		if err := rows.Scan(&t.DocType, &t.Total, &t.Archived, &t.Unarchived); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// SyncFailureReasons returns the most common sync-item failure messages with
+// counts, for failure diagnostics.
+func (r *Repo) SyncFailureReasons(ctx context.Context, limit int) ([]models.FailureReason, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT error, count(*) AS n
+		  FROM sync_job_items
+		 WHERE status='failed' AND error <> ''
+		 GROUP BY error
+		 ORDER BY n DESC
+		 LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.FailureReason
+	for rows.Next() {
+		var f models.FailureReason
+		if err := rows.Scan(&f.Error, &f.Count); err != nil {
+			return nil, err
+		}
+		out = append(out, f)
+	}
+	return out, rows.Err()
+}
+
 // GetDocument fetches a single document scoped to the owning user.
 func (r *Repo) GetDocument(ctx context.Context, userID, id string) (*models.Document, error) {
 	d, err := scanDocument(r.pool.QueryRow(ctx, docCols+` WHERE id=$1 AND user_id=$2`, id, userID))

@@ -152,6 +152,23 @@ const ja = {
         failed: "失敗",
       },
     },
+    userStats: {
+      title: "ユーザー別バックアップ状況（{{count}}）",
+      desc: "ユーザーごとのアーカイブ済み／未アーカイブのドキュメント数（documents テーブル基準、未同期が多い順）。",
+      empty: "ドキュメントがありません。",
+      refresh: "更新",
+      line: "同期済み {{archived}} / {{total}}（{{pct}}%）",
+      pending: "{{count}} 件未同期",
+    },
+    failures: {
+      title: "未アーカイブ診断",
+      desc: "一部のドキュメントがアーカイブされない理由——ドキュメント種別ごと・失敗メッセージごとに表示。",
+      refresh: "更新",
+      none: "未アーカイブ項目はありません。",
+      byType: "ドキュメント種別ごと（未アーカイブ数）",
+      byError: "失敗理由ごと",
+      typeLine: "{{unarchived}} 件未アーカイブ / 合計 {{total}}",
+    },
   },
   settings: {
     title: "設定",

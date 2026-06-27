@@ -154,6 +154,23 @@ const en = {
         failed: "Failed",
       },
     },
+    userStats: {
+      title: "Per-user backup status ({{count}})",
+      desc: "Archived vs. not-archived document counts per user (from the documents table; users with the most unsynced first).",
+      empty: "No documents yet.",
+      refresh: "Refresh",
+      line: "Synced {{archived}} / {{total}} ({{pct}}%)",
+      pending: "{{count}} not synced",
+    },
+    failures: {
+      title: "Unarchived diagnostics",
+      desc: "Why some documents aren't archived — broken down by document type and by failure message.",
+      refresh: "Refresh",
+      none: "No unarchived items.",
+      byType: "By document type (unarchived count)",
+      byError: "By failure reason",
+      typeLine: "{{unarchived}} unarchived / {{total}} total",
+    },
   },
   settings: {
     title: "Settings",

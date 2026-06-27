@@ -2,7 +2,16 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Navigate } from "react-router-dom";
 import { Plus, RefreshCw, RotateCcw, Shield } from "lucide-react";
-import { api, type AdminSyncJob, type Connection, type ConnectionInput, type User } from "../api";
+import {
+  api,
+  type AdminSyncJob,
+  type Connection,
+  type ConnectionInput,
+  type FailureReason,
+  type TypeStat,
+  type User,
+  type UserArchiveStat,
+} from "../api";
 import { usePageUser } from "../App";
 import i18n from "../lib/i18n";
 import { formatRelative } from "../lib/format";
@@ -25,6 +34,8 @@ export function Admin() {
         <div className="page-pad panel">
           <Members meId={me.id} />
           <Connections />
+          <UserArchiveStats />
+          <SyncFailures />
           <SyncQueue />
         </div>
       </div>
@@ -358,6 +369,107 @@ function SyncQueue() {
             </div>
           );
         })}
+      </div>
+    </section>
+  );
+}
+
+function UserArchiveStats() {
+  const { t } = useTranslation();
+  const [users, setUsers] = useState<UserArchiveStat[]>([]);
+  const [err, setErr] = useState("");
+
+  const load = useCallback(() => {
+    api.adminArchiveStats().then((r) => setUsers(r.users || [])).catch((e) => setErr(String(e)));
+  }, []);
+  useEffect(load, [load]);
+
+  return (
+    <section className="panel-section">
+      <div className="panel-section__head">
+        <h3>{t("admin.userStats.title", { count: users.length })}</h3>
+        <Button size="sm" icon={RefreshCw} onClick={load}>{t("admin.userStats.refresh")}</Button>
+      </div>
+      <p className="panel-section__desc">{t("admin.userStats.desc")}</p>
+      {err && <p className="error-text" style={{ fontSize: 13, marginBottom: 10 }}>{err}</p>}
+      <div className="data-card">
+        {users.length === 0 && (
+          <div className="data-row text-tertiary" style={{ fontSize: 13 }}>{t("admin.userStats.empty")}</div>
+        )}
+        {users.map((u) => {
+          const pct = u.total > 0 ? Math.round((u.archived / u.total) * 100) : 0;
+          return (
+            <div className="data-row" key={u.user_id}>
+              <div className="data-row__main">
+                <div className="data-row__title">{u.display_name || u.user_id}</div>
+                <div className="data-row__sub mono">
+                  {t("admin.userStats.line", { archived: u.archived, total: u.total, pct })}
+                  {u.unarchived > 0 ? ` · ${t("admin.userStats.pending", { count: u.unarchived })}` : ""}
+                </div>
+                <div style={{ height: 4, borderRadius: 2, background: "var(--border, #e5e5e5)", marginTop: 6, overflow: "hidden" }}>
+                  <div style={{ width: `${pct}%`, height: "100%", background: u.unarchived > 0 ? "var(--accent, #e07a5f)" : "var(--ok, #4a9)" }} />
+                </div>
+              </div>
+              {u.unarchived > 0 && <Badge tone="danger">{t("admin.userStats.pending", { count: u.unarchived })}</Badge>}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function SyncFailures() {
+  const { t } = useTranslation();
+  const [byType, setByType] = useState<TypeStat[]>([]);
+  const [byError, setByError] = useState<FailureReason[]>([]);
+  const [err, setErr] = useState("");
+
+  const load = useCallback(() => {
+    api.adminSyncFailures()
+      .then((r) => { setByType(r.by_type || []); setByError(r.by_error || []); })
+      .catch((e) => setErr(String(e)));
+  }, []);
+  useEffect(load, [load]);
+
+  return (
+    <section className="panel-section">
+      <div className="panel-section__head">
+        <h3>{t("admin.failures.title")}</h3>
+        <Button size="sm" icon={RefreshCw} onClick={load}>{t("admin.failures.refresh")}</Button>
+      </div>
+      <p className="panel-section__desc">{t("admin.failures.desc")}</p>
+      {err && <p className="error-text" style={{ fontSize: 13, marginBottom: 10 }}>{err}</p>}
+
+      <h4 style={{ margin: "4px 0 8px", fontSize: 13 }}>{t("admin.failures.byType")}</h4>
+      <div className="data-card">
+        {byType.length === 0 && (
+          <div className="data-row text-tertiary" style={{ fontSize: 13 }}>{t("admin.failures.none")}</div>
+        )}
+        {byType.map((tp) => (
+          <div className="data-row" key={tp.doc_type}>
+            <div className="data-row__main">
+              <div className="data-row__title mono">{tp.doc_type || "—"}</div>
+              <div className="data-row__sub mono">{t("admin.failures.typeLine", { unarchived: tp.unarchived, total: tp.total })}</div>
+            </div>
+            <Badge tone="danger">{tp.unarchived}</Badge>
+          </div>
+        ))}
+      </div>
+
+      <h4 style={{ margin: "16px 0 8px", fontSize: 13 }}>{t("admin.failures.byError")}</h4>
+      <div className="data-card">
+        {byError.length === 0 && (
+          <div className="data-row text-tertiary" style={{ fontSize: 13 }}>{t("admin.failures.none")}</div>
+        )}
+        {byError.map((f, i) => (
+          <div className="data-row" key={i}>
+            <div className="data-row__main">
+              <div className="data-row__sub mono" style={{ wordBreak: "break-word" }}>{f.error}</div>
+            </div>
+            <Badge tone="neutral">{f.count}</Badge>
+          </div>
+        ))}
       </div>
     </section>
   );
