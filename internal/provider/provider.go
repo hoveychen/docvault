@@ -4,8 +4,23 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
+)
+
+// Export "skip, don't fail" sentinels. A provider wraps one of these (with %w)
+// when an item legitimately can't be exported through no fault of the sync — the
+// engine records these as skipped rather than failed so the diagnostics
+// distinguish genuine errors from expected non-exports.
+var (
+	// ErrPermissionDenied: the authorizing user lacks export-grade permission on
+	// the item (e.g. Feishu code 1069902 — a read-only / no-copy share). Not
+	// fixable by docvault.
+	ErrPermissionDenied = errors.New("permission denied")
+	// ErrNotExportable: the item's type has no export path (e.g. Feishu shortcut /
+	// mindnote). Expected, not an error.
+	ErrNotExportable = errors.New("not exportable")
 )
 
 // Token is a provider OAuth token pair.

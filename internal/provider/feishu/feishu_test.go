@@ -10,7 +10,31 @@ import (
 	larkdocx "github.com/larksuite/oapi-sdk-go/v3/service/docx/v1"
 
 	"github.com/hoveychen/docvault/internal/config"
+	"github.com/hoveychen/docvault/internal/provider"
 )
+
+// A 1069902 ("no permission") response must surface as provider.ErrPermissionDenied
+// so the engine records the item skipped (user can't export), not failed.
+func TestCall_NoPermissionWrapsSentinel(t *testing.T) {
+	p := testProvider()
+	err := p.call(context.Background(), "create export task", func() (bool, int, string, error) {
+		return false, codeNoPermission, "no permission", nil
+	})
+	if !errors.Is(err, provider.ErrPermissionDenied) {
+		t.Fatalf("want ErrPermissionDenied, got %v", err)
+	}
+}
+
+// An unsupported doc type must surface as provider.ErrNotExportable (a skip),
+// not a generic failure. The unsupported-type branch returns before any API call.
+func TestExport_UnsupportedTypeIsNotExportable(t *testing.T) {
+	p := testProvider()
+	_, err := p.Export(context.Background(), &provider.Token{AccessToken: "x"},
+		provider.Item{ExternalID: "n", Title: "Mind", DocType: "mindnote"})
+	if !errors.Is(err, provider.ErrNotExportable) {
+		t.Fatalf("want ErrNotExportable, got %v", err)
+	}
+}
 
 func testProvider() *Provider {
 	return New(config.FeishuConnection{Key: "feishu", Label: "Lark", AppID: "cli_x", AppSecret: "s", Domain: "lark"})
