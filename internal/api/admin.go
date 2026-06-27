@@ -98,6 +98,34 @@ func (h *Handler) wouldRemoveLastAdmin(w http.ResponseWriter, r *http.Request) b
 	return false
 }
 
+// --- sync queue ---
+
+// adminListSyncJobs returns recent sync jobs across all users for the admin
+// queue panel (active jobs first).
+func (h *Handler) adminListSyncJobs(w http.ResponseWriter, r *http.Request) {
+	jobs, err := h.app.Repo.ListRecentJobs(r.Context(), 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list failed")
+		return
+	}
+	if jobs == nil {
+		jobs = []models.AdminSyncJob{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+}
+
+// adminRequeueSyncJob returns a job to the queue. Its main use is recovering a
+// job wedged in 'running' (worker killed mid-slice) without redeploying: the
+// worker reclaims it on the next claim. Reusing RequeueJob also stamps
+// last_sliced_at so the round-robin ordering stays sane.
+func (h *Handler) adminRequeueSyncJob(w http.ResponseWriter, r *http.Request) {
+	if err := h.app.Repo.RequeueJob(r.Context(), r.PathValue("id")); err != nil {
+		writeError(w, http.StatusInternalServerError, "requeue failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
+}
+
 // --- connections ---
 
 func (h *Handler) adminListConnections(w http.ResponseWriter, r *http.Request) {
