@@ -320,6 +320,21 @@ function SyncQueue() {
     }
   };
 
+  const resyncAll = async () => {
+    if (!window.confirm(t("admin.syncQueue.resyncAllConfirm"))) return;
+    setErr("");
+    setBusy("resync-all");
+    try {
+      const r = await api.adminResyncAll();
+      window.alert(t("admin.syncQueue.resyncAllDone", { count: r.enqueued }));
+      load();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy("");
+    }
+  };
+
   const isStuck = (j: AdminSyncJob) =>
     j.status === "running" && Date.now() - new Date(j.created_at).getTime() > STUCK_MS;
   const statusTone = (s: string): "accent" | "neutral" | "danger" =>
@@ -329,7 +344,12 @@ function SyncQueue() {
     <section className="panel-section">
       <div className="panel-section__head">
         <h3>{t("admin.syncQueue.title", { count: jobs.length })}</h3>
-        <Button size="sm" icon={RefreshCw} onClick={load}>{t("admin.syncQueue.refresh")}</Button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Button size="sm" variant="primary" disabled={busy === "resync-all"} onClick={resyncAll}>
+            {t("admin.syncQueue.resyncAll")}
+          </Button>
+          <Button size="sm" icon={RefreshCw} onClick={load}>{t("admin.syncQueue.refresh")}</Button>
+        </div>
       </div>
       <p className="panel-section__desc">{t("admin.syncQueue.desc")}</p>
       {err && <p className="error-text" style={{ fontSize: 13, marginBottom: 10 }}>{err}</p>}
