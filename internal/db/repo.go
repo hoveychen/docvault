@@ -233,6 +233,26 @@ func (r *Repo) EnqueueSyncJob(ctx context.Context, userID, accountID, provider s
 	return id, err
 }
 
+// EnqueueAllAccounts queues a sync for every non-banned user's provider account
+// that has no active (queued/running) job, for the admin "re-sync all" action.
+// The active-job guard makes it idempotent (clicking twice won't double-queue).
+// Returns how many jobs were enqueued.
+func (r *Repo) EnqueueAllAccounts(ctx context.Context) (int, error) {
+	tag, err := r.pool.Exec(ctx, `
+		INSERT INTO sync_jobs (user_id, provider_account_id, provider, status)
+		SELECT pa.user_id, pa.id, pa.provider, 'queued'
+		  FROM provider_accounts pa
+		  JOIN users u ON u.id = pa.user_id AND NOT u.banned
+		 WHERE NOT EXISTS (
+		         SELECT 1 FROM sync_jobs j
+		          WHERE j.provider_account_id = pa.id
+		            AND j.status IN ('queued','running'))`)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // ClaimJob atomically claims the next queued job, marking it running. Ordering is
 // round-robin across slices: never-sliced jobs (last_sliced_at IS NULL) go first
 // by creation order, then the job whose last slice is oldest — so a big account's
