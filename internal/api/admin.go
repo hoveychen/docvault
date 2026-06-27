@@ -126,6 +126,42 @@ func (h *Handler) adminRequeueSyncJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "queued"})
 }
 
+// adminArchiveStats returns per-user archive totals (total / archived /
+// unarchived) for the admin per-user backup-status panel.
+func (h *Handler) adminArchiveStats(w http.ResponseWriter, r *http.Request) {
+	users, err := h.app.Repo.ListUserArchiveStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stats failed")
+		return
+	}
+	if users == nil {
+		users = []models.UserArchiveStat{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"users": users})
+}
+
+// adminSyncFailures returns failure diagnostics: which doc types aren't being
+// archived, and the most common sync-item error messages.
+func (h *Handler) adminSyncFailures(w http.ResponseWriter, r *http.Request) {
+	byType, err := h.app.Repo.UnarchivedByType(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stats failed")
+		return
+	}
+	byError, err := h.app.Repo.SyncFailureReasons(r.Context(), 50)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stats failed")
+		return
+	}
+	if byType == nil {
+		byType = []models.TypeStat{}
+	}
+	if byError == nil {
+		byError = []models.FailureReason{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"by_type": byType, "by_error": byError})
+}
+
 // --- connections ---
 
 func (h *Handler) adminListConnections(w http.ResponseWriter, r *http.Request) {

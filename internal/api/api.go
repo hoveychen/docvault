@@ -57,6 +57,8 @@ func NewRouter(a *app.App) http.Handler {
 	mux.Handle("POST /api/admin/users/{id}/unban", h.requireAdmin(h.adminUnban))
 	mux.Handle("GET /api/admin/sync-jobs", h.requireAdmin(h.adminListSyncJobs))
 	mux.Handle("POST /api/admin/sync-jobs/{id}/requeue", h.requireAdmin(h.adminRequeueSyncJob))
+	mux.Handle("GET /api/admin/archive-stats", h.requireAdmin(h.adminArchiveStats))
+	mux.Handle("GET /api/admin/sync-failures", h.requireAdmin(h.adminSyncFailures))
 	mux.Handle("GET /api/admin/provider-types", h.requireAdmin(h.adminProviderTypes))
 	mux.Handle("GET /api/admin/connections", h.requireAdmin(h.adminListConnections))
 	mux.Handle("POST /api/admin/connections", h.requireAdmin(h.adminCreateConnection))
